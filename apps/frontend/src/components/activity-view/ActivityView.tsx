@@ -244,7 +244,7 @@ export const ActivityView = () => {
           <div className="flex items-center gap-3">
             {hotKeysLastCollectedAt && hotKeysData.length > 0 && (
               <Typography variant="bodyXs">
-                Last collected at: {new Date(hotKeysLastCollectedAt).toLocaleString()}
+                {useHotSlots ? "Last Updated at" : "Last collected at"}: {new Date(hotKeysLastCollectedAt).toLocaleString()}
               </Typography>
             )}
             {useHotSlots && (

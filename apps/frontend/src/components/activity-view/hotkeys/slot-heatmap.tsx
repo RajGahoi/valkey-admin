@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { Link, useParams } from "react-router"
 import { Grid2x2X } from "lucide-react"
 import { convertTTL } from "@common/src/ttl-conversion"
 import { formatBytes } from "@common/src/bytes-conversion"
@@ -90,6 +91,8 @@ function SlotDetails({ group, totalHotKeys, onKeyClick }: {
   totalHotKeys: number
   onKeyClick?: (keyName: string) => void
 }) {
+  const { id, clusterId } = useParams()
+
   if (!group) {
     return (
       <div className="flex-1 flex items-center justify-center p-6">
@@ -127,7 +130,14 @@ function SlotDetails({ group, totalHotKeys, onKeyClick }: {
 
       <footer className="px-4 py-2 border-t border-border">
         <Typography variant="bodyXs">
-          Owned by Node {truncateText(group.nodeId ?? "—")}
+          Owned by Node{" "}
+          {group.nodeId && clusterId ? (
+            <Link className="underline hover:text-primary" to={`/${clusterId}/${id}/cluster-topology`}>
+              {truncateText(group.nodeId)}
+            </Link>
+          ) : (
+            "—"
+          )}
         </Typography>
       </footer>
     </div>

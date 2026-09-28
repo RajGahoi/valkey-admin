@@ -116,7 +116,7 @@ async function main() {
   app.get("/hot-keys", async (req, res) => {
     if (req.query.useHotSlots === "true") {
       const hotKeys = await calculateHotKeysFromHotSlots(client, { count: Number(req.query.count) || 50 }).then(enrichHotKeys(client))
-      return res.json({ hotKeys, nodeId: ownNodeId })
+      return res.json({ hotKeys, nodeId: ownNodeId, lastCollectedAt: Date.now() })
     }
     else useMonitor(res, client, ownNodeId, Number(req.query.count) || 50)
   })
