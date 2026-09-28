@@ -2,7 +2,8 @@ import { GlideClient, GlideClusterClient, InfoOptions, ServerCredentials, Servic
 import * as R from "ramda"
 import WebSocket from "ws"
 import { VALKEY } from "valkey-common"
-import { buildConnectionId, isValidDatabaseIndex, sanitizeUrl, toNodeId } from "valkey-common"
+import { buildConnectionId, isValidDatabaseIndex, sanitizeUrl, toNodeId, buildUrl } from "valkey-common"
+import { mintGcpAccessToken, registerGcpTokenRefresh, unregisterGcpTokenRefresh } from "valkey-common"
 import { KeyEvictionPolicy } from "common/dist"
 import { 
   getExistingClusterClient, 
@@ -21,7 +22,9 @@ import {
   clusterCredentials, 
   reconcileClusterMetricsServers, 
   isKubernetes, 
-  ClusterNodeMap } from "./metrics-orchestrator"
+  forgetCollectorKey,
+  ClusterNodeMap,
+  type NodeInfo } from "./metrics-orchestrator"
 import { subscribe } from "./node-watchers"
 import { clearCpuSamples } from "./node-utilization"
 import { createClusterValkeyClient, createStandaloneValkeyClient } from "./valkey-client"
@@ -171,7 +174,7 @@ async function connectToValkeyLocked(
 
   const {
     host, port, username, password, tls: useTLS,
-    verifyTlsCertificate, authType, awsRegion, awsReplicationGroupId,
+    verifyTlsCertificate, caCertPath, authType, awsRegion, awsReplicationGroupId,
   } = payload.connectionDetails
 
   const db = payload.connectionDetails.db
@@ -183,21 +186,23 @@ async function connectToValkeyLocked(
       port: Number(port),
     },
   ]
-  const credentials: ServerCredentials | undefined =
-    authType === "iam"
-      ? {
-        username: username!,
-        iamConfig: {
-          clusterName: awsReplicationGroupId!,
-          service: ServiceType.Elasticache,
-          region: awsRegion!,
-        },
-      }
-      : password ? { username, password } : undefined
-
   let standaloneClient: GlideClient | undefined
 
   try {
+    const credentials: ServerCredentials | undefined =
+      authType === "iam"
+        ? {
+          username: username!,
+          iamConfig: {
+            clusterName: awsReplicationGroupId!,
+            service: ServiceType.Elasticache,
+            region: awsRegion!,
+          },
+        }
+        : authType === "gcp-iam"
+          ? { username: "default", password: await mintGcpAccessToken(useTLS, verifyTlsCertificate) }
+          : password ? { username, password } : undefined
+
     if (!isValidDatabaseIndex(db)) {
       throw new ConnectionRejectedError(
         "Invalid Database_Index: must be a non-negative integer",
@@ -236,7 +241,7 @@ async function connectToValkeyLocked(
       const existingStandalone = existingConnection.client as GlideClient
       const [keyEvictionPolicy, jsonModuleAvailable, existingDatabasesCount] = await Promise.all([
         getKeyEvictionPolicy(existingStandalone),
-        checkJsonModuleAvailability(existingStandalone),
+        checkJsonModuleAvailability(existingStandalone, connectionId),
         getDatabasesCount(existingStandalone),
       ])
       sendStandaloneConnectFulfilled(ws, {
@@ -256,6 +261,7 @@ async function connectToValkeyLocked(
       credentials,
       useTLS,
       verifyTlsCertificate,
+      caCertPath,
     })
 
     // Open the registration gate: the metrics process spawned below will POST
@@ -330,6 +336,7 @@ async function connectToValkeyLocked(
             credentials,
             useTLS,
             verifyTlsCertificate,
+            caCertPath,
             databaseId: clusterDatabaseId,
           })
           inFlightClusterClients.set(clusterId, ownInflight)
@@ -366,6 +373,7 @@ async function connectToValkeyLocked(
         }
 
         shouldCloseClusterClientOnError = false
+        if (authType === "gcp-iam") registerGcpTokenRefresh(clusterClient, `cluster ${clusterId}`, useTLS, verifyTlsCertificate)
         return clusterClient
       } finally {
         if (ownInflight && inFlightClusterClients.get(clusterId) === ownInflight) {
@@ -408,6 +416,7 @@ async function connectToValkeyLocked(
         credentials,
         useTLS,
         verifyTlsCertificate,
+        caCertPath,
         databaseId: db,
       })
       clients.set(connectionId, { client: standaloneClient })
@@ -419,7 +428,7 @@ async function connectToValkeyLocked(
 
     const [keyEvictionPolicy, jsonModuleAvailable] = await Promise.all([
       getKeyEvictionPolicy(standaloneClient),
-      checkJsonModuleAvailability(standaloneClient),
+      checkJsonModuleAvailability(standaloneClient, connectionId),
     ])
     sendStandaloneConnectFulfilled(ws, {
       connectionId,
@@ -430,6 +439,7 @@ async function connectToValkeyLocked(
       },
     })
 
+    if (authType === "gcp-iam") registerGcpTokenRefresh(standaloneClient, connectionId, useTLS, verifyTlsCertificate)
     return standaloneClient
     
   } catch (err) {
@@ -479,29 +489,32 @@ export async function discoverTopology(
   const { discoveryId, connectionDetails } = payload
   const {
     host, port, username, password, tls: useTLS,
-    verifyTlsCertificate, authType, awsRegion, awsReplicationGroupId,
+    verifyTlsCertificate, caCertPath, authType, awsRegion, awsReplicationGroupId,
   } = connectionDetails
 
   const addresses = [{ host, port: Number(port) }]
-  const credentials: ServerCredentials | undefined =
-    authType === "iam"
-      ? {
-        username: username!,
-        iamConfig: {
-          clusterName: awsReplicationGroupId!,
-          service: ServiceType.Elasticache,
-          region: awsRegion!,
-        },
-      }
-      : password ? { username, password } : undefined
 
   let client: GlideClient | undefined
   try {
+    const credentials: ServerCredentials | undefined =
+      authType === "iam"
+        ? {
+          username: username!,
+          iamConfig: {
+            clusterName: awsReplicationGroupId!,
+            service: ServiceType.Elasticache,
+            region: awsRegion!,
+          },
+        }
+        : authType === "gcp-iam"
+          ? { username: "default", password: await mintGcpAccessToken(useTLS, verifyTlsCertificate) }
+          : password ? { username, password } : undefined
+
     // Cluster discovery is read-only `CLUSTER SLOTS` against the seed node;
     // database selection is irrelevant for cluster commands. Skip
     // `databaseId` entirely so Glide does not issue `SELECT` (cluster nodes
     // reject `SELECT` even for db 0).
-    client = await createStandaloneValkeyClient({ addresses, credentials, useTLS, verifyTlsCertificate })
+    client = await createStandaloneValkeyClient({ addresses, credentials, useTLS, verifyTlsCertificate, caCertPath })
     const { discoveredClusterNodes } = await discoverCluster(client, { connectionDetails })
     if (Object.keys(discoveredClusterNodes).length < 1) {
       throw new Error("Unable to discover cluster")
@@ -541,6 +554,9 @@ function updateClusterNodesClient(
     .filter(([, entry]) => entry.client === existingClusterConnection.client)
     .map(([id]) => id)
 
+  // Stop the GCP IAM token-refresh timer before closing so the stale client is
+  // released immediately rather than lingering until the next refresh interval.
+  unregisterGcpTokenRefresh(existingClusterConnection.client)
   try { existingClusterConnection.client.close() } catch (error) {
     console.error(`Error closing stale client for ${existingClusterConnection.clusterId}:`, error)
   }
@@ -559,7 +575,7 @@ async function commitClusterConnection(
   const [clusterSlotStatsEnabled, keyEvictionPolicy, jsonModuleAvailable, databasesCount] = await Promise.all([
     getClusterSlotStatsEnabled(clusterClient),
     getKeyEvictionPolicy(clusterClient),
-    checkJsonModuleAvailability(clusterClient),
+    checkJsonModuleAvailability(clusterClient, connectionId),
     getDatabasesCount(clusterClient, ["cluster-databases", "databases"]),
   ])
 
@@ -594,7 +610,7 @@ function sendStandaloneConnectFulfilled(ws: WebSocket, payload: StandaloneConnec
 
 export async function discoverCluster(
   client: GlideClient | GlideClusterClient, 
-  payload: { connectionDetails: ConnectionDetails, connectionId?: string;},
+  payload: { connectionDetails: NodeInfo, connectionId?: string;},
 )  {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -617,8 +633,12 @@ export async function discoverCluster(
             awsRegion: payload.connectionDetails.awsRegion,
             awsReplicationGroupId: payload.connectionDetails.awsReplicationGroupId,
           }),
+          ...(payload.connectionDetails.authType === "gcp-iam" && {
+            authType: "gcp-iam" as const,
+          }),
           tls: payload.connectionDetails.tls,
           verifyTlsCertificate: payload.connectionDetails.verifyTlsCertificate,
+          caCertPath: payload.connectionDetails.caCertPath,
           replicas: [],
         }
       }
@@ -642,6 +662,7 @@ export async function discoverCluster(
       username?: string,
       tls: boolean,
       verifyTlsCertificate: boolean,
+      caCertPath?: string,
       replicas: { id: string; host: string; port: number }[];
     }>)
 
@@ -723,13 +744,14 @@ export async function closeMetricsServer(
 
   const metricsServerUri = metricsServerMap.get(nodeId)?.metricsURI
   if (metricsServerUri) {
-    const res = await fetch(`${metricsServerUri}/connection/close`, 
+    const res = await fetch(buildUrl(metricsServerUri, "/connection/close"), 
       { method: "POST",
         headers: { "Content-Type": "application/json" }, 
         body: JSON.stringify({ connectionId: nodeId }), 
       })
     if (res.ok) {
       metricsServerMap.delete(nodeId)
+      forgetCollectorKey(nodeId)
       console.log(`Metrics server for ${nodeId} closed successfully`)
     }
     else console.warn("Could not kill metrics server process")
@@ -753,6 +775,7 @@ export function teardownConnection(
   clients.delete(connectionId)
 
   if (connection && ![...clients.values()].some((c) => c.client === connection.client)) {
+    unregisterGcpTokenRefresh(connection.client)
     try {
       connection.client.close()
     } catch (error) {

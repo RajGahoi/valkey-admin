@@ -3,7 +3,14 @@ import express from "express"
 import helmet from "helmet"
 import path from "path"
 import http from "http"
-import { VALKEY, CONNECTION_TEARDOWN_DELAY_MS, isNodeId, toNodeId } from "valkey-common"
+import {
+  VALKEY,
+  CONNECTION_TEARDOWN_DELAY_MS,
+  isNodeId,
+  toNodeId,
+  ORCHESTRATOR_RATE_LIMIT_MAX_ENV,
+  resolveOrchestratorRateLimitMax
+} from "valkey-common"
 import { fileURLToPath } from "url"
 import rateLimit from "express-rate-limit"
 import { connectPending, resetConnection, closeConnection } from "./actions/connection"
@@ -27,7 +34,6 @@ import { memoryUsageRequested } from "./actions/memoryUsage"
 import { monitorRequested } from "./actions/monitorAction"
 import { unsubscribeAll, getWatcherCount } from "./node-watchers"
 import { teardownConnection } from "./connection"
-import { isElectron } from "./metrics-orchestrator"
 import { Handler, ReduxAction, safeSend, unknownHandler, type WsActionMessage } from "./actions/utils"
 import {
   createMetricsOrchestratorRouter,
@@ -40,7 +46,9 @@ import {
   isKubernetes,
   preConfiguredConnection,
   getInitialClient,
-  updateClusterNodeRegistry
+  updateClusterNodeRegistry,
+  resolveClusterRefreshTarget,
+  setPreconfiguredClusterId
 } from "./metrics-orchestrator"
 import { isAllowedWebSocketOrigin } from "./websocket-origin"
 import { ensureSession, hasAuthorizedSession, isConnectionAuthorized, setSessionExpiryListener } from "./session"
@@ -70,6 +78,26 @@ const limiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 })
+
+/**
+ * Dedicated limit for the collector control plane.
+ *
+ * `/orchestrator/*` gets its own bucket rather than sharing the UI limiter 
+ * because the UI limit is per browser, while this one is effectively per cluster.
+ *
+ * Spawned collectors all call back to `SERVER_HOST` from the same host, so
+ * express-rate-limit's per-address keying puts an entire cluster's collectors
+ * into a single loopback bucket. At a 10s ping interval that is 6 requests per
+ * minute per node, so the UI's 100/min ceiling would begin throttling
+ * legitimate collectors at around 16 nodes. Sizing this separately keeps the
+ * two tunable independently.
+ */
+const orchestratorLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: resolveOrchestratorRateLimitMax(process.env[ORCHESTRATOR_RATE_LIMIT_MAX_ENV]),
+  standardHeaders: true,
+  legacyHeaders: false,
+})
 const app = express()
 const port = Number(process.env.PORT) || 8080
 const server = http.createServer(app)
@@ -80,7 +108,7 @@ const __dirname = path.dirname(__filename)
 const frontendDist = path.join(__dirname, "../../frontend/dist")
 
 app.use((req, res, next) => {
-  if (req.path.startsWith("/orchestrator")) return next()
+  if (req.path.startsWith("/orchestrator")) return orchestratorLimiter(req, res, next)
   return limiter(req, res, next)
 })
 
@@ -116,7 +144,14 @@ const wss = new WebSocketServer({ noServer: true })
 
 const delay = (ms: number) => new Promise((res) => setTimeout(res, ms))
 
-function refreshAllClusterRegistries() {
+// Upper bound on a single cluster's topology re-discovery. Without it, one hung
+// CLUSTER SLOTS would leave the awaited refresh unsettled and stall the broadcast
+// for every cluster, not just the unresponsive one.
+const TOPOLOGY_REDISCOVERY_TIMEOUT_MS = 10_000
+
+async function refreshAllClusterRegistries() {
+  // Group live connections by cluster once; used both to pick a client to
+  // re-discover each cluster's topology and to target the broadcast below.
   const connectionIdsByCluster = new Map<string, string[]>()
   for (const [connectionId, entry] of clients) {
     if (!entry.clusterId) continue
@@ -124,6 +159,28 @@ function refreshAllClusterRegistries() {
     ids.push(connectionId)
     connectionIdsByCluster.set(entry.clusterId, ids)
   }
+
+  // Re-discover each tracked cluster before broadcasting. User-connected clusters
+  // use their own client + node metadata; a preconfigured cluster (K8s / headless
+  // Web) has no entry in `clients`, so it falls back to the initial client so
+  // scaled-in nodes are picked up without a UI session. Time-bounded so one hung
+  // node can't stall the whole loop.
+  await Promise.all(
+    [...clusterNodesRegistry.entries()].map(async ([clusterId, clusterNodes]) => {
+      const connectionId = connectionIdsByCluster.get(clusterId)?.[0]
+      const userClient = connectionId ? clients.get(connectionId)?.client : undefined
+
+      const target = await resolveClusterRefreshTarget(clusterId, clusterNodes, userClient)
+      if (!target) return
+
+      await Promise.race([
+        updateClusterNodeRegistry(target.client, target.nodeInfo, clusterId),
+        delay(TOPOLOGY_REDISCOVERY_TIMEOUT_MS).then(() =>
+          console.warn(`Topology re-discovery for cluster ${clusterId} timed out; broadcasting last known nodes.`),
+        ),
+      ])
+    }),
+  )
 
   for (const [clusterId, clusterNodes] of clusterNodesRegistry) {
     const connectionIds = connectionIdsByCluster.get(clusterId)
@@ -145,7 +202,7 @@ function refreshAllClusterRegistries() {
 async function refreshAllClusterRegistriesLoop() {
   while (true) {
     try {
-      refreshAllClusterRegistries()
+      await refreshAllClusterRegistries()
     } catch (err) {
       console.warn("Unable to refresh cluster topologies. ", err)
     } finally {
@@ -157,13 +214,16 @@ async function refreshAllClusterRegistriesLoop() {
 
 async function updateRegistryforK8() {
   const client = await getInitialClient()
-  updateClusterNodeRegistry(client, initialConnectionDetails)
+  const clusterId = await updateClusterNodeRegistry(client, initialConnectionDetails)
+  setPreconfiguredClusterId(clusterId)
 }
 
-// Electron: bind to localhost only — Origin headers are forgeable by non-browser clients,
-// so network-level isolation is the only reliable gate for a desktop app.
-server.listen(port, isElectron ? "127.0.0.1" : undefined, () => {
-  console.log(`Server running at http://localhost:${port}`)
+// Default to loopback so an unauthenticated Web server isn't reachable off-host;
+// containers (Docker/K8s) set SERVER_BIND_HOST=0.0.0.0 explicitly.
+const bindHost =
+  process.env.SERVER_BIND_HOST ?? (isKubernetes ? "0.0.0.0" : "127.0.0.1")
+server.listen(port, bindHost, () => {
+  console.log(`Server running at http://${bindHost}:${port}`)
   if (process.send) { // Check if process.send is available (i.e., if forked)
     process.send({ type: "websocket-ready" }) // Send a ready message to the parent process
   }

@@ -1,6 +1,6 @@
 import { GlideClusterClient, ConnectionError, ClosingError, TimeoutError } from "@valkey/valkey-glide"
 import WebSocket from "ws"
-import { VALKEY, METRICS_SERVER_NOT_READY } from "valkey-common"
+import { VALKEY, METRICS_SERVER_NOT_READY, buildUrl } from "valkey-common"
 import { type ParsedClusterInfo, parseClusterInfo } from "./utils"
 import { computeClusterUtilization, type NodeUtilization } from "./node-utilization"
 import { fetchWithTimeout } from "./actions/utils"
@@ -33,7 +33,10 @@ const sendSetDataError = (
   error: unknown,
   errorKind?: string, // distinguish "not ready yet" from "real error" for better UI handling
 ) => {
-  console.error(error)
+  // The metrics server registers a moment after connect, so an early stats request
+  // expectedly finds no URI. The frontend retries up to METRICS_MAX_RETRIES and surfaces
+  // the error itself, so logging a stack trace here is just noise. Real failures still log.
+  if (errorKind !== METRICS_SERVER_NOT_READY) console.error(error)
   ws.send(
     JSON.stringify({
       type: VALKEY.STATS.setError,
@@ -57,7 +60,7 @@ export async function setDashboardData(
   }
 
   try {
-    const response = await fetchWithTimeout(`${metricsServerURI}/info`)
+    const response = await fetchWithTimeout(buildUrl(metricsServerURI, "/info"))
     if (!response.ok) {
       throw new Error(`Metrics server responded with ${response.status}`)
     }

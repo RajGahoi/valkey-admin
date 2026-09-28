@@ -51,17 +51,35 @@ const getCurrentConnections = () => R.pipe(
   (s) => (s === null ? {} : JSON.parse(s)),
 )(LOCAL_STORAGE.VALKEY_CONNECTIONS)
 
+// Single write path to localStorage. A password that could not be encrypted
+// (isPasswordEncrypted === false) is never written to disk: it is dropped to
+// undefined so the connection re-prompts on next use, and the transient flag is
+// not persisted either. All persistence writes must go through this.
+export const persistConnections = (connections: Record<string, ConnectionState>) => {
+  const safe = Object.fromEntries(
+    Object.entries(connections).map(([id, conn]) => {
+      if (conn?.isPasswordEncrypted === false) {
+        const stripped = { ...conn, connectionDetails: { ...conn.connectionDetails, password: undefined } }
+        delete stripped.isPasswordEncrypted
+        return [id, stripped]
+      }
+      return [id, conn]
+    }),
+  )
+  localStorage.setItem(LOCAL_STORAGE.VALKEY_CONNECTIONS, JSON.stringify(safe))
+}
+
 export const connectionEpic = (store: Store) =>
   merge(
     action$.pipe(
       select(connectPending),
       filter(() => !selectIsAtConnectionLimit(store.getState())),
       mergeMap(async (action) => {
-        const { password } = action.payload.connectionDetails
-        if (R.isNil(password) || action.payload.connectionDetails.authType === "iam") return action
+        const { password, authType } = action.payload.connectionDetails
+        if (R.isNil(password) || authType === "iam" || authType === "gcp-iam") return action
         
         // Password is dispatched as plaintext if secureStorage is unavailable
-        const decryptedPassword = password.length > 0 && secureStorage.isAvailable() ? await secureStorage.decrypt(password) : password
+        const decryptedPassword = password.length > 0 && secureStorage.isElectron() ? await secureStorage.decrypt(password) : password
         
         return R.assocPath(
           ["payload", "connectionDetails", "password"],
@@ -97,10 +115,11 @@ export const connectionEpic = (store: Store) =>
             status: NOT_CONNECTED,
             connectionHistory: connection?.connectionHistory ?? [],
             searchableText: connection?.searchableText ?? "",
+            isPasswordEncrypted: connection?.isPasswordEncrypted,
           }
 
           currentConnections[payload.connectionId] = connectionToSave
-          localStorage.setItem(LOCAL_STORAGE.VALKEY_CONNECTIONS, JSON.stringify(currentConnections))
+          persistConnections(currentConnections)
 
           if (baseConnectionDetails?.host?.includes(".serverless.")) {
             toast.warning(
@@ -156,6 +175,7 @@ export const connectionEpic = (store: Store) =>
             port: String(firstNode.port),
             endpointType: "node",
           },
+          isPasswordEncrypted: discovery.isPasswordEncrypted,
         }))
         // store the connectionId in the discovery state so we can show the correct connection status
         store.dispatch(discoveryNodeConnecting({ discoveryId, connectionId }))
@@ -283,7 +303,8 @@ export const autoReconnectEpic = (store: Store) =>
         .filter(([, connection]) => connection.status === DISCONNECTED)
         .filter(([, connection]) =>
           R.isNotNil(connection.connectionDetails.password) ||
-          connection.connectionDetails.authType === "iam")
+          connection.connectionDetails.authType === "iam" ||
+          connection.connectionDetails.authType === "gcp-iam")
 
       if (disconnectedConnections.length > 0) {
         console.log(`Auto-reconnecting ${disconnectedConnections.length} connection(s)`)
@@ -316,7 +337,7 @@ export const autoResumeEpic = (store: Store) =>
         .filter(([, connection]) => isAutoResumeEligible(connection))
         .forEach(([connectionId, connection]) => {
           const { password, authType } = connection.connectionDetails
-          if (authType === "iam" || (R.isNotNil(password) && R.isEmpty(password))) {
+          if (authType === "iam" || authType === "gcp-iam" || (R.isNotNil(password) && R.isEmpty(password))) {
             if (connection.status !== DISCONNECTED) {
               store.dispatch(connectPending({
                 connectionId,
@@ -372,7 +393,7 @@ export const deleteConnectionEpic = () =>
           const currentConnections = getCurrentConnections()
           if (currentConnections[connectionId]) {
             currentConnections[connectionId].userDisconnected = true
-            localStorage.setItem(LOCAL_STORAGE.VALKEY_CONNECTIONS, JSON.stringify(currentConnections))
+            persistConnections(currentConnections)
           }
         } catch (e) {
           console.error(e)
@@ -415,7 +436,8 @@ export const updateConnectionDetailsEpic = (store: Store) =>
           currentConnections[connectionId].connectionDetails = connection.connectionDetails
           currentConnections[connectionId].connectionHistory = connection.connectionHistory || []
           currentConnections[connectionId].searchableText = connection.searchableText ?? ""
-          localStorage.setItem(LOCAL_STORAGE.VALKEY_CONNECTIONS, JSON.stringify(currentConnections))
+          currentConnections[connectionId].isPasswordEncrypted = connection.isPasswordEncrypted
+          persistConnections(currentConnections)
         }
       } catch (e) {
         console.error(e)

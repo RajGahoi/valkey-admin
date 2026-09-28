@@ -38,6 +38,18 @@ The TCP port the Express + WebSocket server listens on. The same port serves the
 PORT=9090
 ```
 
+### `SERVER_BIND_HOST`
+
+Network interface the server binds to. Defaults to loopback (`127.0.0.1`) so an unauthenticated Web server is not reachable off-host unless you opt in. Web mode has no authentication, so only bind a routable interface when access is otherwise restricted (authenticating proxy, security groups, etc.).
+
+- **Default:** `127.0.0.1` (loopback); `0.0.0.0` when `DEPLOYMENT_MODE=K8`
+- **Read in:** `apps/server/src/index.ts`
+- **Note:** The Docker image sets `SERVER_BIND_HOST=0.0.0.0` so published ports (`-p`) are reachable; bind the published port to loopback (`-p 127.0.0.1:8080:8080`) to keep it local.
+
+```bash
+SERVER_BIND_HOST=0.0.0.0
+```
+
 ## Mode & Orchestrator
 
 ### `DEPLOYMENT_MODE`
@@ -46,7 +58,7 @@ Controls how the server manages metrics processes and which nodes get monitored.
 
 - **`Electron`** — spawn metrics only for explicitly connected nodes (desktop default)
 - **`Web`** — spawn metrics for all cluster nodes on any successful connection (Docker default)
-- **`K8`** — expect externally-managed metrics sidecars that self-register via `/orchestrator/register`
+- **`K8`** — expect externally-managed metrics sidecars that self-register via `/orchestrator/register`. Registration requires a credential these sidecars cannot currently obtain, so this mode does not yet collect metrics; see [Kubernetes deployment](/deployment/kubernetes/).
 
 - **Default:** `Electron` for the desktop build, `Web` for Docker
 - **Read in:** `apps/server/src/metrics-orchestrator.ts`, `apps/server/src/websocket-origin.ts`
@@ -64,6 +76,69 @@ How long (in milliseconds) the server waits between cluster topology refresh cyc
 
 - **Default:** `30000`
 - **Read in:** `apps/server/src/index.ts`
+
+### `ORCHESTRATOR_AUTH_WINDOW_MS`
+
+How far (in milliseconds) a collector's signed timestamp may sit from server time before its credential is refused. Widen this only if collectors and the server run on hosts whose clocks cannot be kept closely in sync.
+
+A registration or ping rejected for skew is logged with the measured offset, so a clock problem is distinguishable from a bad credential:
+
+```text
+Rejected metrics registration for 127-0-0-1-6379: stale_timestamp (clock skew 94000ms)
+```
+
+- **Default:** `60000`
+- **Read in:** `apps/server/src/metrics-orchestrator.ts`
+
+### `ORCHESTRATOR_KEY`
+
+Key material a metrics collector uses to authenticate to `/orchestrator/register` and `/orchestrator/ping`. See [Collector authentication](#collector-authentication) below.
+
+**Do not set this yourself in Electron, Web, or Docker mode.** The server mints a separate key per collector it spawns and injects it into that child, overriding anything inherited from the server's own environment.
+
+- **Default:** unset
+- **Read in:** `apps/server/src/metrics-orchestrator.ts`, `apps/metrics/src/utils/orchestrator-auth.js`
+
+### `ORCHESTRATOR_RATE_LIMIT_MAX`
+
+Requests per minute allowed on `/orchestrator/*`, counted per source address and tracked separately from the UI's own limit.
+
+This is effectively a **per-cluster** budget, not a per-collector one. Spawned collectors all call back to `SERVER_HOST` from the same host, so every collector in a cluster shares a single loopback bucket. Each one sends roughly 6 requests per minute at the default 10s ping interval, so the budget you need scales with node count:
+
+| Cluster nodes | Steady-state requests/min |
+|---|---|
+| 6 | 36 |
+| 30 | 180 |
+| 100 | 600 |
+
+The default covers about 100 nodes with headroom for registration retries. Raise it for larger clusters, or if collectors are configured with a shorter `ping_interval`. Symptom of a ceiling that is too low: collectors logging `Register failed: 429` or `Ping failed: 429`, and nodes intermittently losing their metrics.
+
+- **Default:** `600`
+- **Read in:** `apps/server/src/index.ts`
+
+## Collector Authentication
+
+The `/orchestrator` routes accept writes that change where the server sends its own requests: a registration records the URI the server will later fetch metrics from. Both routes therefore require a credential, and an unauthenticated or unverifiable request is answered with `401` and changes nothing.
+
+For Electron, Web, and Docker deployments this needs no configuration. When the server spawns a collector it generates a random key for that collector alone, keeps it in memory, and passes it to the child through the spawn environment as `ORCHESTRATOR_KEY`. The key is discarded when the collector stops.
+
+The collector signs each request with an HMAC-SHA256 tag over its node id, the URI it is advertising, and a timestamp, and sends the result in an `X-Orchestrator-Auth` header:
+
+```text
+POST /orchestrator/register
+X-Orchestrator-Auth: v1;<tag>
+{"nodeId":"127-0-0-1-6379","metricsServerUri":"http://127.0.0.1:54321","timestamp":1772404800000}
+```
+
+Because the advertised URI is covered by the tag, a captured credential cannot be reused to point the server at a different address — it can only re-assert the URI it was issued for. The timestamp bounds how long a captured credential stays usable, and registration and ping credentials are not interchangeable.
+
+Every field in the request body is signed. The server ignores anything else it receives, so an unsigned field cannot influence what gets recorded.
+
+Beyond authentication, the server validates the advertised URI itself. It must be an `http`/`https` origin with no path, query, or fragment. In every non-Kubernetes mode (Electron, Web, Docker) the collector is a loopback child of the server, so its advertised host must be loopback (`127.0.0.1`, `localhost`, or `::1`); a URI naming any other host is rejected with `400`. This is defense in depth — authentication already restricts *who* may register, and this restricts *where* a registration can point the server's own requests, so a collector whose key leaked still cannot turn the server into an SSRF relay. Kubernetes sidecars legitimately advertise a routable pod address and are not subject to the loopback restriction.
+
+A collector that starts without `ORCHESTRATOR_KEY` logs a single error and shuts down rather than issuing requests that can only be refused.
+
+Requests to `/orchestrator/*` are rate limited separately from the UI, defaulting to 600 per minute per source address — see [`ORCHESTRATOR_RATE_LIMIT_MAX`](#orchestrator_rate_limit_max).
 
 ### `VALKEY_ADMIN_ALLOWED_WS_ORIGINS`
 
@@ -111,9 +186,13 @@ Enable TLS for the Valkey connection. Compared as the literal string `"true"`.
 
 ### `VALKEY_VERIFY_CERT`
 
-Verify the TLS server certificate. Compared as the literal string `"true"`. Leave this off only when you are knowingly talking to a node with a self-signed cert.
+Verify the TLS server certificate. Verification is **on** unless this is set to the literal string `"false"`. Disable it only when you knowingly talk to a node with a self-signed cert and cannot supply its CA via `VALKEY_CA_CERT_PATH`. Verification cannot be disabled for `gcp-iam` — the IAM token is a bearer credential and requires a verified TLS channel.
 
-- **Default:** `false`
+- **Default:** `true`
+
+### `VALKEY_CA_CERT_PATH`
+
+Filesystem path to a PEM CA certificate used to verify the Valkey server's TLS certificate. Only consulted when `VALKEY_TLS=true` and verification is enabled (`VALKEY_VERIFY_CERT` is not `false`). Glide performs TLS in its Rust core, so a private CA must be supplied this way — Node's trust store and `NODE_EXTRA_CA_CERTS` do not apply. Typical use: mount your server CA (for example a Memorystore for Valkey CA) as a secret and point this at the mounted file.
 
 ### `VALKEY_ENDPOINT_TYPE`
 
@@ -127,6 +206,7 @@ Tells the orchestrator how to interpret `VALKEY_HOST` / `VALKEY_PORT` when disco
 Selects the credentials provider for the initial connection.
 
 - **`"iam"`** — use AWS ElastiCache IAM authentication. Requires `VALKEY_USERNAME`, `VALKEY_AWS_REGION`, and `VALKEY_REPLICATION_GROUP_ID`.
+- **`"gcp-iam"`** — use GCP Memorystore for Valkey IAM authentication. Mints a short-lived OAuth2 access token from Application Default Credentials (Workload Identity in GKE, the metadata server on GCE, or `GOOGLE_APPLICATION_CREDENTIALS` locally) and rotates it before expiry. Authenticates as the `default` user — the only username Memorystore supports — so `VALKEY_USERNAME` is ignored.
 - **anything else** — fall back to password authentication using `VALKEY_USERNAME` / `VALKEY_PASSWORD`.
 
 - **Default:** `"password"`
@@ -154,6 +234,10 @@ The host that spawned children should call back to when registering with `/orche
 The port that spawned children should call back to when registering.
 
 - **Default:** `8080`
+
+### `ORCHESTRATOR_KEY` (set per child, not inherited)
+
+Unlike the variables above, this one is **not** inherited from the server. The server overrides it with a freshly generated per-collector key after copying its own environment, so a value set on the server never reaches a spawned child. See [Collector authentication](#collector-authentication).
 
 ### `DATA_DIR`
 

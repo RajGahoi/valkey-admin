@@ -3,7 +3,7 @@ title: Metrics
 description: Configuration for the apps/metrics process
 ---
 
-The `apps/metrics` process is a small Node.js sampler. Each instance is responsible for exactly one Valkey node (or one cluster, when run standalone): it opens a connection, runs the collectors defined in its config, writes NDJSON output to disk, exposes an HTTP API the server consumes, and registers itself with the Valkey Admin server's `/orchestrator/register` endpoint at startup.
+The `apps/metrics` process is a small Node.js sampler. Each instance is responsible for exactly one Valkey node (or one cluster, when run standalone): it opens a connection, runs the collectors defined in its config, writes NDJSON output to disk, exposes an HTTP API the server consumes, and registers itself with the Valkey Admin server's `/orchestrator/register` endpoint at startup. Registration is authenticated, see [`ORCHESTRATOR_KEY`](#orchestrator_key).
 
 The metrics process is unusual in that it has **two** sources of configuration that layer on top of each other:
 
@@ -72,15 +72,6 @@ Host of the Valkey node this metrics process will sample. Required.
 
 Port of the Valkey node. Required.
 
-### `VALKEY_MODE`
-
-Connection topology used by the Valkey client.
-
-- **`"standalone"`** — single-node client (default)
-- **`"cluster"`** — cluster client
-
-If unset, falls back to `valkey.mode` from `config.yml`, then to `"standalone"`.
-
 ### `VALKEY_USERNAME`
 
 Username for password or IAM authentication.
@@ -99,11 +90,16 @@ Enable TLS. Compared as the literal string `"true"`.
 
 Verify the TLS server certificate. When TLS is enabled and this is `"false"`, certificate verification is skipped — useful for development against self-signed certs, but not for production.
 
+### `VALKEY_CA_CERT_PATH`
+
+Filesystem path to a PEM CA certificate used to verify the Valkey server's TLS certificate — for both the Glide client and the iovalkey MONITOR stream. Only consulted when `VALKEY_TLS=true` and verification is enabled. Glide performs TLS in its Rust core, so a private CA must be supplied this way rather than via Node's trust store or `NODE_EXTRA_CA_CERTS`.
+
 ### `VALKEY_AUTH_TYPE`
 
 Selects the credentials provider.
 
 - **`"iam"`** — use AWS ElastiCache IAM authentication via `ElastiCacheIAMProvider`. Requires `VALKEY_USERNAME`, `VALKEY_AWS_REGION`, and `VALKEY_REPLICATION_GROUP_ID`.
+- **`"gcp-iam"`** — use GCP Memorystore for Valkey IAM authentication. Mints a short-lived OAuth2 access token from Application Default Credentials and rotates it before expiry. Authenticates as the `default` user — the only username Memorystore supports — so `VALKEY_USERNAME` is ignored. Requires TLS with certificate verification: `VALKEY_TLS=true` and `VALKEY_VERIFY_CERT` must not be `"false"` (the general verification opt-out does not apply to `gcp-iam`). Startup fails otherwise, since the IAM token is a bearer credential that must not travel over an unverified channel.
 - **anything else** — password authentication using `VALKEY_USERNAME` / `VALKEY_PASSWORD`.
 
 ### `VALKEY_AWS_REGION`
@@ -142,6 +138,8 @@ Network interface the metrics HTTP server binds to. The metrics endpoints have n
 
 Host the metrics process advertises to the server in its registration payload — this is the host the orchestrator will actually dial back. Use it to bridge bind-vs-advertise differences in containers.
 
+Outside Kubernetes the collector runs as a loopback child of the server, which pins the advertised host to loopback and rejects a registration naming any other host with `400`. Set a non-loopback value here only in the Kubernetes sidecar case, where the advertised address is the pod IP or service name. See [Collector authentication](/configuration/server/#collector-authentication).
+
 - **Default:** falls back to `METRICS_HOST`, then `127.0.0.1`
 
 ### `METRICS_HOST`
@@ -151,6 +149,29 @@ Legacy alias for `METRICS_ADVERTISE_HOST`. Kept for backward compatibility; new 
 ### `METRICS_ADVERTISE_PORT`
 
 Port advertised to the server. If unset, the process advertises the actual port assigned by `app.listen()`. This is what makes `PORT=0` work — the OS picks a free port and the process tells the server which one.
+
+### `ORCHESTRATOR_KEY`
+
+Key material used to sign the `register` and `ping` requests. Registration is authenticated, so a collector cannot advertise itself without it.
+
+When the Valkey Admin server spawns this process — Electron, Web, and Docker deployments — it generates a key for this collector alone and injects it, so there is nothing to configure.
+
+Each request carries an HMAC-SHA256 tag over the node id, the advertised URI, and a timestamp, sent in an `X-Orchestrator-Auth` header. Because the advertised URI is part of what is signed, a credential captured off the wire cannot be reused to advertise a different address.
+
+Starting without this variable is fatal by design: the process logs one error and exits rather than sending requests that can only be refused.
+
+- **Default:** unset; supplied by the spawning server
+- **Read in:** `apps/metrics/src/utils/orchestrator-auth.js`
+
+Rejections are reported with the server's reason, which distinguishes the common causes:
+
+| Log line | Cause |
+|---|---|
+| `Register failed: 401 Unauthorized` | Wrong or missing key, or the server has no entry for this node id |
+| `Register failed: 400 Invalid metricsServerUri` | Signed correctly, but the advertised URI is not a usable `http`/`https` address, check `METRICS_ADVERTISE_HOST` and `METRICS_ADVERTISE_PORT` |
+
+A ping answered with `401` triggers one re-registration attempt, which recovers a collector whose entry was pruned by the staleness sweep.
+
 
 ## HTTP & Storage
 

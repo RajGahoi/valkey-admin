@@ -1,5 +1,7 @@
 import fs from "node:fs"
 import express from "express"
+import { ORCHESTRATOR_AUTH_KEY_ENV, buildUrl } from "valkey-common"
+import { registerGcpTokenRefresh, unregisterGcpTokenRefresh } from "valkey-common"
 import { getConfig } from "./config.js"
 import * as Streamer from "./effects/ndjson-streamer.js"
 import { setupCollectors, stopCollectors } from "./init-collectors.js"
@@ -13,6 +15,7 @@ import cpuFold from "./analyzers/calculate-cpu-usage.js"
 import memoryFold from "./analyzers/memory-metrics.js"
 import { bigKeysQuerySchema, cpuQuerySchema, memoryQuerySchema, parseQuery } from "./api-schema.js"
 import { sanitizeUrl } from "./utils/helpers.js"
+import { buildPingRequest, buildRegisterRequest, readOrchestratorKey } from "./utils/orchestrator-auth.js"
 import { setupNdjsonCleaner, stopNdjsonCleaner } from "./effects/ndjson-cleaner.js"
 import { createValkeyClient } from "./valkey-client.js"
 import { scanBigKeys } from "./analyzers/scan-big-keys.js"
@@ -30,6 +33,17 @@ async function main() {
 
   const client = await createValkeyClient(cfg)
   const ownNodeId = sanitizeUrl(`${process.env.VALKEY_HOST}-${process.env.VALKEY_PORT}`)
+
+  // GCP OAuth2 tokens expire ~1h; rotate the connection password before then so
+  // reconnects keep authenticating. AWS IAM refreshes natively inside Glide.
+  if (process.env.VALKEY_AUTH_TYPE === "gcp-iam") {
+    registerGcpTokenRefresh(
+      client,
+      "metrics",
+      process.env.VALKEY_TLS === "true",
+      process.env.VALKEY_VERIFY_CERT !== "false",
+    )
+  }
 
   await setupNdjsonCleaner(cfg)
   await setupCollectors(client, cfg)
@@ -141,26 +155,41 @@ async function main() {
   const server = app.listen(port, metricsBindHost, async () => {
     const assignedPort = server.address().port
     const metricsAdvertisePort = Number(process.env.METRICS_ADVERTISE_PORT || assignedPort)
-    const registerURI = `http://${backendServerHost}:${backendServerPort}/orchestrator/register`
+    const backendServerBase = `http://${backendServerHost}:${backendServerPort}`
+    const registerURI = buildUrl(backendServerBase, "/orchestrator/register")
+    const pingURI = buildUrl(backendServerBase, "/orchestrator/ping")
+    const metricsServerUri = `http://${metricsAdvertiseHost}:${metricsAdvertisePort}`
+    const orchestratorKey = readOrchestratorKey()
     let registerInFlight = null
+
+    // Without key material every request would be rejected, so fail once
+    // loudly. Spawned collectors receive this from the orchestrator; an
+    // externally managed collector needs it provisioned.
+    if (!orchestratorKey) {
+      console.error(
+        `Missing ${ORCHESTRATOR_AUTH_KEY_ENV}: cannot authenticate to the Valkey Admin server. Shutting down.`,
+      )
+      shutdown()
+      return
+    }
 
     const registerWithServer = async () => {
       if (registerInFlight) return registerInFlight
 
       registerInFlight = (async () => {
         try {
+          const request = buildRegisterRequest({
+            key: orchestratorKey,
+            nodeId: ownNodeId,
+            metricsServerUri,
+          })
+          if (!request) {
+            console.error("Could not sign the register request.")
+            return false
+          }
+
           console.debug("Sending Register request to ", registerURI)
-          const response = await fetch(registerURI,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                metricsServerUri: `http://${metricsAdvertiseHost}:${metricsAdvertisePort}`,
-                pid: process.pid,
-                nodeId: ownNodeId,
-              }),
-            },
-          )
+          const response = await fetch(registerURI, { method: "POST", ...request })
 
           const text = await response.text()
 
@@ -199,16 +228,21 @@ async function main() {
     const pingIntervalMs = cfg.backend.ping_interval * (1 + (Math.random() * 2 - 1) * 0.1)
     setInterval(async () => {
       try {
-        const response = await fetch(`http://${backendServerHost}:${backendServerPort}/orchestrator/ping`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ nodeId: ownNodeId }),
-        })
+        const request = buildPingRequest({ key: orchestratorKey, nodeId: ownNodeId })
+        if (!request) {
+          console.error("Could not sign the ping request.")
+          return
+        }
+
+        const response = await fetch(pingURI, { method: "POST", ...request })
 
         if (!response.ok) {
           const text = await response.text()
           console.debug("Ping failed:", response.status, text)
-          if (response.status === 404) {
+          // The orchestrator answers 401 for an unknown node as well as for a
+          // bad credential, so a re-register is the recovery path for an entry
+          // that has been swept away.
+          if (response.status === 401) {
             await registerWithServer()
           }
         } else {
@@ -225,6 +259,7 @@ async function main() {
     try {
       await stopNdjsonCleaner()
       await stopCollectors()
+      unregisterGcpTokenRefresh(client)
       if (client) {
         client.close()
       }

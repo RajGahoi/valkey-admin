@@ -2,10 +2,14 @@
 const { app, BrowserWindow, ipcMain, safeStorage, shell, powerMonitor, session } = require("electron")
 const path = require("path")
 const { fork } = require("child_process")
+const crypto = require("crypto")
 const { createApplicationMenu } = require("./menu")
 
 let serverProcess
 const ELECTRON = "Electron"
+// Per-launch secret shared with the backend so only this app's renderer can open
+// the WebSocket. Regenerated every launch; never persisted.
+const wsToken = crypto.randomBytes(32).toString("hex")
 function startServer() {
   if (app.isPackaged) {
     const serverPath = path.join(process.resourcesPath, "server-backend.cjs")
@@ -14,6 +18,7 @@ function startServer() {
       env: {
         ...process.env,
         DEPLOYMENT_MODE: ELECTRON,
+        ELECTRON_WS_TOKEN: wsToken,
         PROCESS_RESOURCES_PATH: process.resourcesPath,
         DATA_DIR: path.join(app.getPath("userData"), "metrics-data"),
       },
@@ -39,6 +44,8 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, "preload.js"),
+      // Hand the per-launch token to the preload (readable via process.argv).
+      additionalArguments: [`--valkey-admin-ws-token=${wsToken}`],
     },
   })
 
@@ -126,10 +133,16 @@ powerMonitor.on("resume", () => {
   })
 })
 
+ipcMain.handle("secure-storage:is-encryption-available", async () => safeStorage.isEncryptionAvailable())
+
 ipcMain.handle("secure-storage:encrypt", async (event, password) => {
-  if (!password || !safeStorage.isEncryptionAvailable()) return password
-  const encrypted = safeStorage.encryptString(password)
-  return encrypted.toString("base64")
+  if (!password) return { ok: true, value: "" }
+  // Fail closed: never return the plaintext password when the OS has no secure
+  // store, so the renderer can't persist an unprotected secret while implying it
+  // is encrypted. The caller keeps the plaintext for the live connection and marks
+  // it do-not-persist.
+  if (!safeStorage.isEncryptionAvailable()) return { ok: false }
+  return { ok: true, value: safeStorage.encryptString(password).toString("base64") }
 })
 
 ipcMain.handle("secure-storage:decrypt", async (event, encryptedBase64) => {
