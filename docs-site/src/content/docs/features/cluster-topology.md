@@ -3,46 +3,48 @@ title: Cluster Topology
 description: Visualize and manage your Valkey cluster structure
 ---
 
-The Cluster Topology view provides an interactive list of your Valkey cluster's nodes, showing replication relationships and connection status at a glance.
+The Cluster Topology view provides an interactive table of your Valkey cluster's nodes, showing replication relationships and connection status at a glance.
 
 ## Overview
 
-Understand your cluster architecture with a structured node list that groups each primary with its replica, giving you a clear picture of your replication layout.
+Understand your cluster architecture with a structured node table that groups each primary with its replica, giving you a clear picture of your replication layout.
 
 ![Cluster Topology View](../../../assets/cluster_topology.png)
 
 ## Cluster Statistics
 
-At the top of the page, four summary cards display key cluster metrics:
+At the top of the page, five summary cards display key cluster metrics:
 
 - **Total Nodes**: Total number of nodes in the cluster (primaries + replicas)
-- **Primary Nodes**: Count of primary nodes
-- **Replicas**: Count of replica nodes
-- **Connected**: Number of nodes currently connected and reachable
+- **Cluster Memory**: Memory used across the cluster, out of the total memory limit
+- **Total Ops/Sec**: Operations per second across the cluster
+- **Cluster Hit Ratio**: Share of key lookups that found the key
+- **Nodes Flagged**: Number of primaries with **High** utilization
 
 ## Node List
 
 ### Layout
 
-Nodes are displayed in a paired row layout. Each row groups a primary node on the left with its associated replicas on the right.
+Nodes are displayed in a table. Each primary row is followed by rows for its replicas.
 
 ### Node Display
 
-Each node card shows:
+Each node shows its **name**, a `PRIMARY` or `REPLICA` **role badge**, and its **address** (e.g. `192.168.18.6:7001`). Primary rows also show:
 
-- **Name**: The Valkey instance name (e.g. `valkey`)
-- **Role Badge**: `PRIMARY` or `REPLICA`
-- **Address**: Host and port (e.g. `10.0.0.95:7001`)
-- **Memory**: Memory usage reported by `used_memory_human` (e.g. `3.60M`)
-- **Connected Clients**: Number of currently connected clients
+- **Utilization**: `Low`, `Normal` or `High`, based on the higher of memory and CPU usage. Hover the badge for details.
+- **Memory**: Memory used out of the node's limit (e.g. `70.81M / 100 MB`)
+- **CPU**: CPU usage
+- **Ops/Sec**: Operations per second
+- **Hit Ratio**: Share of key lookups that found the key
+- **Conns**: Number of connected clients
 
-### Searching Nodes
+### Searching and Filtering
 
-Use the search bar to filter nodes by name, host, or port.
+Use the search bar to filter nodes by name, host, or port. Narrow the list further with the **role** and **utilization** filters. The count of matching nodes is shown next to the filters.
 
 ## Node Actions
 
-Each node row includes action icons on the right side:
+Each primary row includes action icons on the right side:
 
 - **Power**: Connect to the primary node
 - **Dashboard**: Go to dashboard of the node
@@ -50,15 +52,13 @@ Each node row includes action icons on the right side:
 
 ## Replication Structure
 
-Each row pairs a primary with its replica:
+Each primary is followed by its replica:
 
 ```
-Primary: 10.0.0.95:7001  →  Replica: 10.0.0.95:7005
-Primary: 10.0.0.95:7002  →  Replica: 10.0.0.95:7006
-Primary: 10.0.0.95:7003  →  Replica: 10.0.0.95:7004
+Primary: 192.168.18.6:7001  →  Replica: 192.168.18.6:7005
+Primary: 192.168.18.6:7002  →  Replica: 192.168.18.6:7006
+Primary: 192.168.18.6:7003  →  Replica: 192.168.18.6:7004
 ```
-
-Clicking on a replica's address link navigates to that node's detail view.
 
 
 ## Next Steps
