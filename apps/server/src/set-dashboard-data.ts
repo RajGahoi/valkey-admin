@@ -117,7 +117,7 @@ const refreshClusterNodes = async (
 ): Promise<ClusterNodesRefresh> => {
   const current = clusterNodesRegistry.get(clusterId)
   const template = current && Object.values(current)[0]
-  if (!template) return { clusterNodes: current }
+  if (!template) return { clusterNodes: undefined, topologyError: "No stored topology for this cluster" }
 
   try {
     const { discoveredClusterNodes } = await discoverCluster(client, {
