@@ -73,6 +73,7 @@ interface ClusterState {
     searchableText: {
       [nodeAddress: string]: string;
     };
+    topologyError?: string;
   };
 }
 const initialClusterState: ClusterState = {}
@@ -108,9 +109,11 @@ const clusterSlice = createSlice({
       delete state.clusters[action.payload.clusterId]
     },
     setClusterData: (state, action) => {
-      const { clusterId, info, utilization, clusterNodes } = action.payload
+      const { clusterId, info, utilization, clusterNodes, topologyError } = action.payload
 
       if (!state.clusters[clusterId]) return
+
+      state.clusters[clusterId].topologyError = topologyError
 
       if (clusterNodes && !R.equals(current(state.clusters[clusterId].clusterNodes), clusterNodes)) {
         state.clusters[clusterId].clusterNodes = clusterNodes

@@ -9,6 +9,7 @@ import { calculateHitRatio } from "@common/src/cache-hit-ratio.ts"
 import { AppHeader } from "../ui/app-header"
 import RouteContainer from "../ui/route-container"
 import { StatCard } from "../ui/stat-card"
+import { Alert, AlertDescription, AlertTitle } from "../ui/alert"
 import { SearchInput } from "../ui/search-input"
 import { Select } from "../ui/select"
 import { Typography } from "../ui/typography"
@@ -96,6 +97,12 @@ export function Cluster() {
         icon={<Server size={20} />}
         title="Cluster Topology"
       />
+      {clusterData.topologyError && (
+        <Alert variant="warning">
+          <AlertTitle>Cluster topology may be out of date</AlertTitle>
+          <AlertDescription>{clusterData.topologyError}</AlertDescription>
+        </Alert>
+      )}
       {/* Cluster Stats */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         <StatCard label="Total Nodes" value={nodeRows.length} />
