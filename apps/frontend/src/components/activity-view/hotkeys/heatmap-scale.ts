@@ -15,5 +15,5 @@ export function snapToBucket(ratio: number): number {
 
 // Converts a value to a ratio between 0 and 1 based on the given min and max
 export function toRatio(value: number, min: number, max: number): number {
-  return max === min ? 0 : (value - min) / (max - min)
+  return max === min ? 1 : (value - min) / (max - min)
 }

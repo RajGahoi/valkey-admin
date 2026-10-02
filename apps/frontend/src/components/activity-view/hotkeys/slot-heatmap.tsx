@@ -6,9 +6,11 @@ import { formatBytes } from "@common/src/bytes-conversion"
 import { truncateText } from "@common/src/truncate-text"
 import { Typography } from "../../ui/typography"
 import { EmptyState } from "../../ui/empty-state"
+import { TableContainer } from "../../ui/table-container"
+import { StaticTableHeader } from "../../ui/sortable-table-header"
 import { HeatmapLegend } from "./heatmap-legend"
 import { NodeFilterDropdown } from "./node-filter-dropdown"
-import { getColor, snapToBucket } from "./heatmap-scale"
+import { getColor, snapToBucket, toRatio } from "./heatmap-scale"
 import type { HotKeyEntry } from "./hot-keys"
 
 interface SlotGroup {
@@ -30,8 +32,9 @@ interface SlotHeatmapProps {
   onKeyClick?: (keyName: string) => void
 }
 
-const toTileRatio = (value: number, min: number, max: number) =>
-  max === min ? 1 : (value - min) / (max - min)
+const SLOT_INTENSITY_DESCRIPTION = "Color shows how many of your top hot keys each slot holds compared with "
+  + "the other slots shown. Darkest means most, lightest means fewest. If all slots hold the same number, "
+  + "all are shown darkest."
 
 const groupKeysBySlot = (hotKeys: HotKeyEntry[]): SlotGroup[] => {
   const grouped = new Map<number, SlotGroup>()
@@ -101,45 +104,61 @@ function SlotDetails({ group, totalHotKeys, onKeyClick }: {
     )
   }
 
+  const nodeLabel = group.nodeId && truncateText(group.nodeId)
+
   return (
     <div className="flex-1 flex flex-col min-h-0">
       <header className="flex items-baseline justify-between gap-4 px-4 py-3 border-b border-border">
-        <Typography variant="label">Slot {group.slotId}</Typography>
-        <Typography variant="bodyXs">
+        <Typography variant="label">
+          Slot {group.slotId}
+          {nodeLabel && (
+            <>
+              {" "}in Node{" "}
+              {clusterId ? (
+                <Link className="underline hover:text-primary" to={`/${clusterId}/${id}/cluster-topology`}>
+                  {nodeLabel}
+                </Link>
+              ) : (
+                nodeLabel
+              )}
+            </>
+          )}
+        </Typography>
+        <Typography className="shrink-0" variant="bodyXs">
           {group.rows.length} of your top {totalHotKeys} hot key{totalHotKeys !== 1 ? "s" : ""}
         </Typography>
       </header>
 
-      <ul className="flex-1 overflow-y-auto min-h-0 px-4 py-2">
+      <TableContainer
+        className="min-h-0"
+        header={
+          <>
+            <StaticTableHeader label="Key Name" width="w-1/2" />
+            <StaticTableHeader className="text-center" label="Size" width="w-1/4" />
+            <StaticTableHeader className="text-center" label="TTL" width="w-1/4" />
+          </>
+        }
+      >
         {group.rows.map(([keyName, , size, ttl], index) => (
-          <li key={`${keyName}-${index}`}>
-            <button
-              className="w-full flex items-center justify-between gap-4 py-1.5 rounded-sm text-left hover:bg-accent"
-              onClick={() => onKeyClick?.(keyName)}
-              type="button"
-            >
-              <Typography className="truncate" variant="code">{keyName}</Typography>
-              <span className="flex items-center gap-4 shrink-0">
-                <Typography variant="bodyXs">Size: {size === null ? "—" : formatBytes(size)}</Typography>
-                <Typography variant="bodyXs">TTL: {convertTTL(ttl)}</Typography>
-              </span>
-            </button>
-          </li>
+          <tr
+            className="border-b dark:border-tw-dark-border cursor-pointer hover:bg-gray-50 dark:hover:bg-neutral-800/50"
+            key={`${keyName}-${index}`}
+            onClick={() => onKeyClick?.(keyName)}
+            onKeyDown={(e) => e.key === "Enter" && onKeyClick?.(keyName)}
+            tabIndex={0}
+          >
+            <td className="px-4 py-2 w-1/2 max-w-0">
+              <Typography className="block truncate" variant="code">{keyName}</Typography>
+            </td>
+            <td className="px-4 py-2 w-1/4 text-center">
+              <Typography variant="bodySm">{size === null ? "—" : formatBytes(size)}</Typography>
+            </td>
+            <td className="px-4 py-2 w-1/4 text-center">
+              <Typography className="whitespace-nowrap" variant="bodySm">{convertTTL(ttl)}</Typography>
+            </td>
+          </tr>
         ))}
-      </ul>
-
-      <footer className="px-4 py-2 border-t border-border">
-        <Typography variant="bodyXs">
-          Owned by Node{" "}
-          {group.nodeId && clusterId ? (
-            <Link className="underline hover:text-primary" to={`/${clusterId}/${id}/cluster-topology`}>
-              {truncateText(group.nodeId)}
-            </Link>
-          ) : (
-            "—"
-          )}
-        </Typography>
-      </footer>
+      </TableContainer>
     </div>
   )
 }
@@ -223,6 +242,7 @@ export function SlotHeatmap({ hotKeys, failedNodeCount, onKeyClick }: SlotHeatma
       </div>
 
       <HeatmapLegend
+        description={SLOT_INTENSITY_DESCRIPTION}
         label="Select one or multiple legends to filter slots by hot key concentration"
         onToggle={toggleBucket}
         selectedBuckets={selectedBuckets}
@@ -233,7 +253,7 @@ export function SlotHeatmap({ hotKeys, failedNodeCount, onKeyClick }: SlotHeatma
           <div className="flex-1 rounded-lg border border-border p-4 overflow-y-auto min-h-0">
             <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-6 gap-2">
               {groups.map((group) => {
-                const ratio = toTileRatio(group.rows.length, min, max)
+                const ratio = toRatio(group.rows.length, min, max)
                 return (
                   <SlotTile
                     dimmed={!isActive(ratio)}

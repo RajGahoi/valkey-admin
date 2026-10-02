@@ -21,6 +21,9 @@ interface NodeHeatmapProps {
   data: HotKeyEntry[]
 }
 
+const NODE_INTENSITY_DESCRIPTION = "Color shows how many hot keys each node holds compared with the other "
+  + "nodes. Darkest means most, lightest means fewest. If all nodes hold the same number, all are shown darkest."
+
 export function NodeHeatmap({ data }: NodeHeatmapProps) {
   const [hovered, setHovered] = useState<HoveredTile | null>(null)
   const [selectedBuckets, setSelectedBuckets] = useState<Set<number>>(new Set())
@@ -75,6 +78,7 @@ export function NodeHeatmap({ data }: NodeHeatmapProps) {
 
       <div className="flex flex-col gap-3 min-h-0">
         <HeatmapLegend
+          description={NODE_INTENSITY_DESCRIPTION}
           label="Select one or multiple legends to filter nodes by hot key concentration"
           onToggle={toggleBucket}
           selectedBuckets={selectedBuckets}
@@ -86,12 +90,14 @@ export function NodeHeatmap({ data }: NodeHeatmapProps) {
               const ratio = toRatio(stat.count, min, max)
               return (
                 <div
+                  aria-label={`${stat.nodeId}: ${stat.count} hot key${stat.count !== 1 ? "s" : ""}, ${stat.totalAccess.toLocaleString()} total accesses`}
                   className={`w-5 h-5 rounded transition-all relative cursor-default
                     ${isActive(ratio) ? "hover:scale-125 hover:z-10 hover:shadow-sm" : "opacity-20"}`}
                   key={stat.nodeId}
                   onMouseEnter={(e) => handleMouseEnter(stat, e)}
                   onMouseLeave={handleMouseLeave}
                   onMouseMove={handleMouseMove}
+                  role="img"
                   style={{ backgroundColor: getColor(ratio) }}
                 />
               )
