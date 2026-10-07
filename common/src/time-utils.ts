@@ -64,3 +64,13 @@ export function milliSecondsToSeconds(ms: number): string {
   const seconds = ms / 1000
   return `${seconds.toFixed(0)}s`
 }
+
+export function formatExecutionTime(ms: number): string {
+  if (ms < 1) {
+    return "< 1 ms"
+  }
+  if (ms < 1000) {
+    return `${Number.isInteger(ms) ? ms : ms.toFixed(1)} ms`
+  }
+  return `${(ms / 1000).toFixed(2)} s`
+}

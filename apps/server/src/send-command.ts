@@ -14,8 +14,10 @@ export async function sendValkeyRunCommand(
   ws: WebSocket,
   payload: { command: string; connectionId: string },
 ) {
+  const startTime = performance.now()
   try {
     const response = await client.customCommand(parseCommandArgs(payload.command))
+    const durationMs = Math.round((performance.now() - startTime) * 100) / 100
     const isError = isRequestError(response)
 
     ws.send(
@@ -23,6 +25,7 @@ export async function sendValkeyRunCommand(
         meta: {
           command: payload.command,
           connectionId: payload.connectionId,
+          durationMs,
         },
         type: isError
           ? VALKEY.COMMAND.sendFailed
@@ -34,6 +37,7 @@ export async function sendValkeyRunCommand(
     )
 
   } catch (err) {
+    const durationMs = Math.round((performance.now() - startTime) * 100) / 100
     console.error(`Valkey command error for ${payload.connectionId}:`, err)
 
     // Send command failure
@@ -42,6 +46,7 @@ export async function sendValkeyRunCommand(
         meta: {
           connectionId: payload.connectionId,
           command: payload.command,
+          durationMs,
         },
         type: VALKEY.COMMAND.sendFailed,
         payload: err,

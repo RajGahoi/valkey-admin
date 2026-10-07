@@ -1,9 +1,10 @@
-import { CopyIcon, GitCompareIcon, RotateCwIcon, Search, Settings, SquareTerminal } from "lucide-react"
+import { CopyIcon, GitCompareIcon, RotateCwIcon, Search, Settings, SquareTerminal, Timer } from "lucide-react"
 import React, { useMemo, useRef, useState } from "react"
 import { useSelector } from "react-redux"
 import { useParams } from "react-router"
 import { toast } from "sonner"
 import { truncateText } from "@common/src/truncate-text"
+import { formatExecutionTime } from "@common/src/time-utils"
 import { findBlockedCommand, findConfirmCommand, parseCommandArgs } from "@common/src/command-restrictions"
 import type { JSONObject } from "@common/src/json-utils.ts"
 import { matchCommands, type MatchResult, type ValkeyCommand } from "@/components/send-command/valkey-command-matching"
@@ -51,7 +52,7 @@ export function SendCommand() {
   const clusterAlias = useSelector(selectClusterAlias(id!))
   const allCommands = useSelector(selectAllCommands(id as string)) || []
   const historyLimit = useSelector(selectCommandHistoryLimit)
-  const { error, response } = useSelector(getNth(commandIndex, id as string)) as CommandMetadata
+  const { error, response, durationMs } = useSelector(getNth(commandIndex, id as string)) as CommandMetadata
 
   const dispatchCommand = (command: string) => {
     dispatch(sendRequested({ command, connectionId: id }))
@@ -158,7 +159,15 @@ export function SendCommand() {
       <div className="flex-1 overflow-auto w-full flex flex-row gap-4">
         {/* response | diff */}
         <div className="flex flex-col flex-2">
-          <Typography className="mb-2" variant="bodySm">{compareWith ? "Diff" : "Response"}</Typography>
+          <div className="mb-2 flex items-center justify-between">
+            <Typography variant="bodySm">{compareWith ? "Diff" : "Response"}</Typography>
+            {compareWith === null && durationMs != null && (
+              <span className="flex items-center gap-1 text-xs text-muted-foreground font-mono">
+                <Timer className="size-3.5" />
+                <span>{formatExecutionTime(durationMs)}</span>
+              </span>
+            )}
+          </div>
           <div className="mb-2 relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 z-10" size={18} />
             <Input
@@ -217,7 +226,7 @@ export function SendCommand() {
                   .slice(0, historyLimit)
                   .map((c, i) => ({ ...c, i })) // moving index inside objects because filter will ruin the sequence
                   .filter(({ command }) => command.toLowerCase().includes(normalisedHistoryFilter))
-                  .map(({ command, timestamp, i }) =>
+                  .map(({ command, timestamp, durationMs: cmdDuration, i }) =>
                     <div
                       className={cn(
                         "flex flex-row text-sm items-center py-1 px-2 rounded",
@@ -230,6 +239,17 @@ export function SendCommand() {
                         className="opacity-70"
                         timestamp={timestamp}
                       />
+                      {cmdDuration != null && (
+                        <span
+                          className={cn(
+                            "text-xs opacity-70 ml-1.5 shrink-0 select-none",
+                            i === commandIndex && "text-white opacity-85",
+                          )}
+                          title={`Execution time: ${formatExecutionTime(cmdDuration)}`}
+                        >
+                          {formatExecutionTime(cmdDuration)}
+                        </span>
+                      )}
                       <Tooltip delayDuration={2000}>
                         <TooltipTrigger asChild>
                           <Typography

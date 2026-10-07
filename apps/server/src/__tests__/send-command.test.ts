@@ -37,6 +37,8 @@ describe("sendValkeyRunCommand", () => {
     assert.strictEqual(sentMessage.payload, "myvalue")
     assert.strictEqual(sentMessage.meta.connectionId, "conn-123")
     assert.strictEqual(sentMessage.meta.command, "GET mykey")
+    assert.strictEqual(typeof sentMessage.meta.durationMs, "number")
+    assert.strictEqual(sentMessage.meta.durationMs >= 0, true)
   })
 
   it("should parse string responses with colons", async () => {
