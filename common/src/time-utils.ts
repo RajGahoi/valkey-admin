@@ -65,6 +65,11 @@ export function milliSecondsToSeconds(ms: number): string {
   return `${seconds.toFixed(0)}s`
 }
 
+/**
+ * Formats command execution duration into human-readable representation.
+ * @param ms - Duration in milliseconds
+ * @returns Formatted execution time string (e.g. "< 1 ms", "12.3 ms", "1.50 s")
+ */
 export function formatExecutionTime(ms: number): string {
   if (ms < 1) {
     return "< 1 ms"

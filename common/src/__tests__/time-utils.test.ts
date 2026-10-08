@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert"
-import { formatExecutionTime, formatDuration, timeAgo } from "../time-utils"
+import { formatExecutionTime } from "../time-utils"
 
 describe("time-utils", () => {
   describe("formatExecutionTime", () => {
