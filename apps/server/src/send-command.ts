@@ -17,7 +17,7 @@ export async function sendValkeyRunCommand(
   const startTime = performance.now()
   try {
     const response = await client.customCommand(parseCommandArgs(payload.command))
-    const durationMs = Math.round((performance.now() - startTime) * 100) / 100
+    const durationMs = performance.now() - startTime
     const isError = isRequestError(response)
 
     ws.send(
@@ -37,7 +37,7 @@ export async function sendValkeyRunCommand(
     )
 
   } catch (err) {
-    const durationMs = Math.round((performance.now() - startTime) * 100) / 100
+    const durationMs = performance.now() - startTime
     console.error(`Valkey command error for ${payload.connectionId}:`, err)
 
     // Send command failure

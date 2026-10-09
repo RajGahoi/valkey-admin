@@ -17,6 +17,7 @@ import { AppHeader } from "@/components/ui/app-header.tsx"
 import { cn, copyToClipboard } from "@/lib/utils.ts"
 import { Timestamp } from "@/components/ui/timestamp.tsx"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx"
+import { TooltipIcon } from "@/components/ui/tooltip-icon.tsx"
 import { Button } from "@/components/ui/button.tsx"
 import { Input } from "@/components/ui/input.tsx"
 import { Textarea } from "@/components/ui/textarea.tsx"
@@ -162,9 +163,13 @@ export function SendCommand() {
           <div className="mb-2 flex items-center justify-between">
             <Typography variant="bodySm">{compareWith ? "Diff" : "Response"}</Typography>
             {compareWith === null && durationMs != null && (
-              <span className="flex items-center gap-1 text-xs text-muted-foreground font-mono">
+              <span className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono">
                 <Timer className="size-3.5" />
                 <span>{formatExecutionTime(durationMs)}</span>
+                <TooltipIcon
+                  description="Round-trip time from the server to Valkey, including network and wait time."
+                  size={13}
+                />
               </span>
             )}
           </div>
@@ -239,17 +244,6 @@ export function SendCommand() {
                         className="opacity-70"
                         timestamp={timestamp}
                       />
-                      {cmdDuration != null && (
-                        <span
-                          className={cn(
-                            "text-xs opacity-70 ml-1.5 shrink-0 select-none",
-                            i === commandIndex && "text-white opacity-85",
-                          )}
-                          title={`Execution time: ${formatExecutionTime(cmdDuration)}`}
-                        >
-                          {formatExecutionTime(cmdDuration)}
-                        </span>
-                      )}
                       <Tooltip delayDuration={2000}>
                         <TooltipTrigger asChild>
                           <Typography
@@ -271,7 +265,18 @@ export function SendCommand() {
                           </Typography>
                         </TooltipContent>
                       </Tooltip>
-                      <div className="flex flex-row justify-self-end ml-auto">
+                      <div className="flex flex-row items-center justify-self-end ml-auto shrink-0">
+                        {cmdDuration != null && (
+                          <span
+                            className={cn(
+                              "text-xs opacity-70 mr-1 select-none",
+                              i === commandIndex && "text-white opacity-85",
+                            )}
+                            title={`Round-trip time: ${formatExecutionTime(cmdDuration)}`}
+                          >
+                            {formatExecutionTime(cmdDuration)}
+                          </span>
+                        )}
                         <Tooltip delayDuration={1000}>
                           <TooltipTrigger>
                             <CopyIcon

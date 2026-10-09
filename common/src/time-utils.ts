@@ -74,8 +74,9 @@ export function formatExecutionTime(ms: number): string {
   if (ms < 1) {
     return "< 1 ms"
   }
-  if (ms < 1000) {
-    return `${Number.isInteger(ms) ? ms : ms.toFixed(1)} ms`
+  if (ms < 999.95) {
+    const rounded = Math.round(ms * 10) / 10
+    return `${rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)} ms`
   }
   return `${(ms / 1000).toFixed(2)} s`
 }

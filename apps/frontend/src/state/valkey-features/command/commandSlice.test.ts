@@ -3,7 +3,7 @@ import { VALKEY } from "@common/src/constants.ts"
 import commandReducer, {
   sendRequested,
   setCommandHistoryLimit,
-  type CommandState,
+  type CommandState
 } from "./commandSlice"
 
 describe("commandSlice", () => {
