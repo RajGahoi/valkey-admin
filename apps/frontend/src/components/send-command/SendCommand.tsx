@@ -1,4 +1,4 @@
-import { CopyIcon, GitCompareIcon, RotateCwIcon, Search, Settings, SquareTerminal, Timer } from "lucide-react"
+import { CopyIcon, GitCompareIcon, RotateCwIcon, Search, Settings, SquareTerminal } from "lucide-react"
 import React, { useMemo, useRef, useState } from "react"
 import { useSelector } from "react-redux"
 import { useParams } from "react-router"
@@ -17,7 +17,6 @@ import { AppHeader } from "@/components/ui/app-header.tsx"
 import { cn, copyToClipboard } from "@/lib/utils.ts"
 import { Timestamp } from "@/components/ui/timestamp.tsx"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx"
-import { TooltipIcon } from "@/components/ui/tooltip-icon.tsx"
 import { Button } from "@/components/ui/button.tsx"
 import { Input } from "@/components/ui/input.tsx"
 import { Textarea } from "@/components/ui/textarea.tsx"
@@ -162,16 +161,6 @@ export function SendCommand() {
         <div className="flex flex-col flex-2">
           <div className="mb-2 flex items-center justify-between">
             <Typography variant="bodySm">{compareWith ? "Diff" : "Response"}</Typography>
-            {compareWith === null && durationMs != null && (
-              <span className="flex items-center gap-1.5 text-xs text-muted-foreground font-mono">
-                <Timer className="size-3.5" />
-                <span>{formatExecutionTime(durationMs)}</span>
-                <TooltipIcon
-                  description="Round-trip time from the server to Valkey, including network and wait time."
-                  size={13}
-                />
-              </span>
-            )}
           </div>
           <div className="mb-2 relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 z-10" size={18} />
@@ -187,6 +176,7 @@ export function SendCommand() {
                 {
                   compareWith === null ?
                     <Response
+                      durationMs={durationMs}
                       filter={keysFilter}
                       response={response || error as JSONObject}
                     /> :
