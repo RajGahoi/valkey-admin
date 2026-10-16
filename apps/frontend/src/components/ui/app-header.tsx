@@ -96,6 +96,7 @@ function AppHeader({ title, icon, description, className }: AppHeaderProps) {
     const targetPath = pathname.replace(`/${id}/`, `/${newConnectionId}/`)
 
     if (!allConnections?.[newConnectionId] || allConnections[newConnectionId].status !== CONNECTED) {
+      const activeConn = id ? allConnections?.[id] : undefined
       dispatch(
         connectPending({
           connectionId: newConnectionId,
@@ -103,6 +104,7 @@ function AppHeader({ title, icon, description, className }: AppHeaderProps) {
             ...currentDetails,
             db: newDb,
           },
+          isPasswordEncrypted: activeConn?.isPasswordEncrypted,
         }),
       )
     }
