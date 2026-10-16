@@ -26,7 +26,9 @@ export async function sendValkeyRunCommand(
     const options = payload.route
       ? { route: { type: "routeByAddress" as const, host: payload.route.host, port: payload.route.port } }
       : undefined
-    const response = await client.customCommand(commandArgs, options)
+    const response = options
+      ? await client.customCommand(commandArgs, options)
+      : await client.customCommand(commandArgs)
     const durationMs = performance.now() - startTime
     const isError = isRequestError(response)
 
