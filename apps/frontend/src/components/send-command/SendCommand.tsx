@@ -63,9 +63,9 @@ export function SendCommand() {
   const dispatchCommand = (command: string) => {
     let route: { host: string; port: number } | undefined
     if (selectedNodeRoute !== "auto") {
-      const [host, portStr] = selectedNodeRoute.split(":")
-      if (host && portStr) {
-        route = { host, port: parseInt(portStr, 10) }
+      const selectedRow = clusterNodeRows.find((node) => node.searchKey === selectedNodeRoute)
+      if (selectedRow) {
+        route = { host: selectedRow.host, port: selectedRow.port }
       }
     }
 
