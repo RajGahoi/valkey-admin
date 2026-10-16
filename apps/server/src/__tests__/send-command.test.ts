@@ -256,4 +256,25 @@ describe("parseCommandArgs", () => {
       ["MSET", "key1", "val1", "key2", "val2"],
     )
   })
+
+  it("should pass routeByAddress to GlideClusterClient when route is provided", async () => {
+    class MockClusterClient {
+      customCommand = mock.fn(async () => "PONG")
+    }
+    const mockClusterClient = new MockClusterClient()
+
+    const payload = {
+      command: "PING",
+      connectionId: "cluster-conn",
+      route: { host: "127.0.0.1", port: 7000 },
+    }
+
+    await sendValkeyRunCommand(mockClusterClient as any, mockWs as any, payload)
+
+    assert.strictEqual(mockClusterClient.customCommand.mock.calls.length, 1)
+    assert.deepStrictEqual(mockClusterClient.customCommand.mock.calls[0].arguments, [
+      ["PING"],
+      { route: { type: "routeByAddress", host: "127.0.0.1", port: 7000 } },
+    ])
+  })
 })
