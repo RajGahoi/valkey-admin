@@ -55,7 +55,7 @@ describe("AppHeader Database Switcher", () => {
       dispatched.push(action)
       return originalDispatch(action)
     }) as typeof store.dispatch
-    render(<AppHeader title="Key Browser" icon={null} />, { store })
+    render(<AppHeader icon={null} title="Key Browser" />, { store })
   }
 
   beforeEach(() => {
