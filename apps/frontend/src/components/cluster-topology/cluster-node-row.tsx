@@ -94,8 +94,23 @@ export function ClusterNodeRow({
     db: clusterDb,
   }
 
-  const handleNodeConnect = () => {
-    if (isConnected || isConnecting) return
+  const [pendingTargetRoute, setPendingTargetRoute] = useState<string | null>(null)
+
+  const handleNodeConnect = (targetRoute?: string) => {
+    if (isConnected) {
+      if (targetRoute) navigate(targetRoute)
+      return
+    }
+
+    if (isConnecting) {
+      if (targetRoute) navigate(targetRoute)
+      return
+    }
+
+    if (isDisabled) {
+      if (targetRoute) navigate(targetRoute)
+      return
+    }
 
     if (primaryConfig.authType === "iam") {
       // IAM: all fields available from cluster state, no password needed
@@ -109,6 +124,7 @@ export function ClusterNodeRow({
           awsReplicationGroupId: primaryConfig.awsReplicationGroupId,
         },
       }))
+      if (targetRoute) navigate(targetRoute)
     } else if (primaryConfig.authType === "gcp-iam") {
       // GCP IAM: tokens are minted from ambient credentials, no password needed
       dispatch(connectPending({
@@ -119,6 +135,7 @@ export function ClusterNodeRow({
           authType: "gcp-iam",
         },
       }))
+      if (targetRoute) navigate(targetRoute)
     } else if (R.isNotNil(clusterPassword)) {
       // Reuse the sibling connection's stored password, carrying its
       // isPasswordEncrypted marking so an unencrypted one is still never persisted.
@@ -131,8 +148,12 @@ export function ClusterNodeRow({
         },
         isPasswordEncrypted: clusterPassword.isPasswordEncrypted,
       }))
+      if (targetRoute) navigate(targetRoute)
     } else {
-      // No stored password — prompt for password
+      // No stored password — keep the user on the current view to enter the password
+      if (targetRoute) {
+        setPendingTargetRoute(targetRoute)
+      }
       setShowPasswordModal(true)
     }
   }
@@ -149,6 +170,11 @@ export function ClusterNodeRow({
       },
       isPasswordEncrypted: result.ok,
     }))
+    if (pendingTargetRoute) {
+      const route = pendingTargetRoute
+      setPendingTargetRoute(null)
+      navigate(route)
+    }
   }
 
   const hasLimit = hasMemoryLimit(utilization)
@@ -173,18 +199,20 @@ export function ClusterNodeRow({
   const isResponsive = Boolean(nodeData && (nodeData.role || nodeData.uptime_in_days || nodeData.used_memory))
   const isDegraded = isResponsive && utilizationLevel === "high"
 
-  const healthStatus: "healthy" | "degraded" | "unreachable" = !isResponsive
+  const healthStatus: "healthy" | "degraded" | "unreachable" = isError
     ? "unreachable"
-    : isDegraded
-      ? "degraded"
-      : "healthy"
+    : !isResponsive
+      ? "unreachable"
+      : isDegraded
+        ? "degraded"
+        : "healthy"
 
-  const healthTooltip = healthStatus === "healthy"
-    ? `Node Healthy · Responsive (${nodeData?.uptime_in_days ?? 0}d uptime)`
-    : healthStatus === "degraded"
-      ? "Node Degraded · High resource utilization"
-      : isError
-        ? "Node Unreachable · Connection error"
+  const healthTooltip = isError
+    ? "Node Unreachable · Connection error"
+    : healthStatus === "healthy"
+      ? `Node Healthy · Responsive (${nodeData?.uptime_in_days ?? 0}d uptime)`
+      : healthStatus === "degraded"
+        ? "Node Degraded · High resource utilization"
         : "Node Unreachable · No metrics received"
 
   return (
@@ -278,10 +306,8 @@ export function ClusterNodeRow({
                   aria-label="Dashboard"
                   className="h-8 w-8 p-0"
                   onClick={() => {
-                    if (!isConnected && !isConnecting && !isDisabled) {
-                      handleNodeConnect()
-                    }
-                    navigate(`/${clusterId}/${connectionId}/dashboard`)
+                    const targetRoute = `/${clusterId}/${connectionId}/dashboard`
+                    handleNodeConnect(targetRoute)
                   }}
                   size="sm"
                   variant="ghost"
@@ -294,10 +320,8 @@ export function ClusterNodeRow({
                   aria-label="Command"
                   className="h-8 w-8 p-0"
                   onClick={() => {
-                    if (!isConnected && !isConnecting && !isDisabled) {
-                      handleNodeConnect()
-                    }
-                    navigate(`/${clusterId}/${connectionId}/sendcommand`)
+                    const targetRoute = `/${clusterId}/${connectionId}/sendcommand`
+                    handleNodeConnect(targetRoute)
                   }}
                   size="sm"
                   variant="ghost"

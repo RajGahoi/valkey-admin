@@ -3,6 +3,7 @@ import { render, screen, fireEvent } from "@testing-library/react"
 import { Provider } from "react-redux"
 import { configureStore } from "@reduxjs/toolkit"
 import { MemoryRouter } from "react-router"
+import { ERROR } from "@common/src/constants"
 import { ClusterNodeRow } from "../cluster-node-row"
 import type { PrimaryNode, ParsedNodeInfo, NodeUtilization } from "@/state/valkey-features/cluster/clusterSlice"
 
@@ -152,8 +153,66 @@ describe("ClusterNodeRow - Health Indicator & Uncoupled Actions (Issue #461)", (
     expect(healthDot.getAttribute("aria-label")).toContain("Node Unreachable")
   })
 
-  it("allows clicking Dashboard and Command buttons unconditionally", () => {
-    const store = createMockStore()
+  it("prioritizes isError over cached nodeData and marks node as unreachable", () => {
+    const store = createMockStore({
+      valkeyConnection: {
+        connections: {
+          "127-0-0-1-6379-db0": { status: ERROR },
+        },
+      },
+    })
+    const nodeData: ParsedNodeInfo = {
+      uptime_in_days: "5",
+      tcp_port: "6379",
+      used_memory_human: "10M",
+      used_memory: "10485760",
+      maxmemory: "100M",
+      used_cpu_sys: "1.2",
+      instantaneous_ops_per_sec: "120",
+      total_commands_processed: "50000",
+      role: "master",
+      connected_clients: "8",
+      keyspace_hits: "900",
+      keyspace_misses: "100",
+    }
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter>
+          <table>
+            <tbody>
+              <ClusterNodeRow
+                clusterId="cluster-1"
+                host="127.0.0.1"
+                nodeData={nodeData}
+                port={6379}
+                primaryConfig={defaultPrimaryConfig}
+                role="primary"
+              />
+            </tbody>
+          </table>
+        </MemoryRouter>
+      </Provider>,
+    )
+
+    const healthDot = screen.getByRole("status")
+    expect(healthDot.getAttribute("aria-label")).toContain("Node Unreachable")
+    expect(healthDot.getAttribute("aria-label")).toContain("Connection error")
+  })
+
+  it("navigates immediately to Dashboard and Command routes when cluster password is available", () => {
+    const store = createMockStore({
+      valkeyConnection: {
+        connections: {
+          "seed-node": {
+            connectionDetails: {
+              clusterId: "cluster-1",
+              password: "secret-password",
+            },
+          },
+        },
+      },
+    })
 
     render(
       <Provider store={store}>
@@ -184,5 +243,34 @@ describe("ClusterNodeRow - Health Indicator & Uncoupled Actions (Issue #461)", (
 
     fireEvent.click(commandBtn)
     expect(mockNavigate).toHaveBeenCalledWith("/cluster-1/127-0-0-1-6379-db0/sendcommand")
+  })
+
+  it("opens password modal when no password is saved, and navigates upon password submission", () => {
+    const store = createMockStore()
+
+    render(
+      <Provider store={store}>
+        <MemoryRouter>
+          <table>
+            <tbody>
+              <ClusterNodeRow
+                clusterId="cluster-1"
+                host="127.0.0.1"
+                port={6379}
+                primaryConfig={defaultPrimaryConfig}
+                role="primary"
+              />
+            </tbody>
+          </table>
+        </MemoryRouter>
+      </Provider>,
+    )
+
+    const dashboardBtn = screen.getByRole("button", { name: "Dashboard" })
+    expect(dashboardBtn).not.toBeDisabled()
+
+    fireEvent.click(dashboardBtn)
+    // Modal opens instead of immediate navigation
+    expect(screen.getByRole("dialog")).toBeInTheDocument()
   })
 })
