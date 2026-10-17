@@ -249,7 +249,7 @@ server.listen(port, bindHost, () => {
   }
   refreshAllClusterRegistriesLoop()
 
-  if (preConfiguredConnection) {
+  if (preConfiguredConnection && !isKubernetes) {
     startPreconfiguredMetricsServers()
   }
   if (isKubernetes) {
