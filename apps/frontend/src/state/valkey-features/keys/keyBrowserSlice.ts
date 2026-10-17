@@ -9,6 +9,8 @@ interface KeyInfo {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   elements?: any;
   elementsWarning?: string;
+  cursor?: string;
+  hasMoreElements?: boolean;
 }
 
 interface KeyBrowserState {
@@ -18,6 +20,7 @@ interface KeyBrowserState {
     loading: boolean;
     error: string | null;
     keyTypeLoading: { [key: string]: boolean };
+    elementsLoading: { [key: string]: boolean };
     totalKeys: number;
   };
 }
@@ -29,6 +32,7 @@ export const createConnectionState = (): KeyBrowserState[string] => ({
   loading: false,
   error: null,
   keyTypeLoading: {},
+  elementsLoading: {},
   totalKeys: 0,
 })
 
@@ -279,6 +283,69 @@ const keyBrowserSlice = createSlice({
       }
     },
 
+    getKeyElementsRequested: (
+      state,
+      action: PayloadAction<{
+        connectionId: string;
+        key: string;
+        keyType: string;
+        cursor?: string;
+        offset?: number;
+        count?: number;
+      }>,
+    ) => {
+      const { connectionId, key } = action.payload
+      if (!state[connectionId]) {
+        state[connectionId] = createConnectionState()
+      }
+      state[connectionId].elementsLoading[key] = true
+    },
+    getKeyElementsFulfilled: (
+      state,
+      action: PayloadAction<{
+        connectionId: string;
+        key: string;
+        keyType: string;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        elements: any[];
+        cursor?: string;
+        offset?: number;
+        hasMore?: boolean;
+        collectionSize?: number;
+      }>,
+    ) => {
+      const { connectionId, key, elements, cursor, hasMore, collectionSize } = action.payload
+      if (!state[connectionId]) {
+        state[connectionId] = createConnectionState()
+      }
+      delete state[connectionId].elementsLoading[key]
+      const targetKey = state[connectionId].keys.find((k) => k.name === key)
+      if (targetKey) {
+        if (Array.isArray(targetKey.elements)) {
+          targetKey.elements = [...targetKey.elements, ...elements]
+        } else {
+          targetKey.elements = elements
+        }
+        targetKey.cursor = cursor
+        targetKey.hasMoreElements = hasMore
+        if (collectionSize !== undefined) {
+          targetKey.collectionSize = collectionSize
+        }
+      }
+    },
+    getKeyElementsFailed: (
+      state,
+      action: PayloadAction<{
+        connectionId: string;
+        key: string;
+        error: string;
+      }>,
+    ) => {
+      const { connectionId, key } = action.payload
+      if (state[connectionId]) {
+        delete state[connectionId].elementsLoading[key]
+      }
+    },
   },
 })
 
@@ -299,4 +366,7 @@ export const {
   updateKeyRequested,
   updateKeyFulfilled,
   updateKeyFailed,
+  getKeyElementsRequested,
+  getKeyElementsFulfilled,
+  getKeyElementsFailed,
 } = keyBrowserSlice.actions

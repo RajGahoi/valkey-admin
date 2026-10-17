@@ -664,6 +664,155 @@ export async function getKeyInfoSingle(
   }
 }
 
+export async function getKeyElements(
+  client: GlideClient | GlideClusterClient,
+  ws: WebSocket,
+  payload: {
+    connectionId: string;
+    key: string;
+    keyType: string;
+    cursor?: string;
+    offset?: number;
+    count?: number;
+  },
+) {
+  const { connectionId, key, keyType, cursor = "0", offset = 0, count = 100 } = payload
+  try {
+    const normalizedType = keyType.toLowerCase().trim()
+    let elements: unknown[] = []
+    let nextCursor: string | undefined = undefined
+    let nextOffset: number | undefined = undefined
+    let hasMore = false
+    let collectionSize: number | undefined = undefined
+
+    switch (normalizedType) {
+      case "hash": {
+        const [sizeResult, scanResult] = await Promise.all([
+          client.customCommand(["HLEN", key]) as Promise<number>,
+          client.customCommand(["HSCAN", key, cursor, "COUNT", count.toString()]) as Promise<[string, GlideReturnType[]]>,
+        ])
+        collectionSize = sizeResult
+        const [returnedCursor, rawElements] = scanResult
+        nextCursor = returnedCursor
+        hasMore = returnedCursor !== "0"
+        const hashElements: { key: string; value: string }[] = []
+        for (let i = 0; i < rawElements.length; i += 2) {
+          hashElements.push({
+            key: String(rawElements[i]),
+            value: String(rawElements[i + 1]),
+          })
+        }
+        elements = hashElements
+        break
+      }
+
+      case "set": {
+        const [sizeResult, scanResult] = await Promise.all([
+          client.customCommand(["SCARD", key]) as Promise<number>,
+          client.customCommand(["SSCAN", key, cursor, "COUNT", count.toString()]) as Promise<[string, GlideReturnType[]]>,
+        ])
+        collectionSize = sizeResult
+        const [returnedCursor, rawElements] = scanResult
+        nextCursor = returnedCursor
+        hasMore = returnedCursor !== "0"
+        elements = rawElements.map((el) => String(el))
+        break
+      }
+
+      case "list": {
+        const sizeResult = await client.customCommand(["LLEN", key]) as number
+        collectionSize = sizeResult
+        const start = offset
+        const stop = offset + count - 1
+        if (start < sizeResult) {
+          const rawElements = await client.customCommand([
+            "LRANGE",
+            key,
+            start.toString(),
+            stop.toString(),
+          ]) as string[]
+          elements = rawElements.map((el) => String(el))
+          nextOffset = offset + elements.length
+          hasMore = nextOffset < sizeResult
+        } else {
+          elements = []
+          nextOffset = offset
+          hasMore = false
+        }
+        break
+      }
+
+      case "zset": {
+        const sizeResult = await client.customCommand(["ZCARD", key]) as number
+        collectionSize = sizeResult
+        const start = offset
+        const stop = offset + count - 1
+        if (start < sizeResult) {
+          const rawElements = await client.customCommand([
+            "ZRANGE",
+            key,
+            start.toString(),
+            stop.toString(),
+            "WITHSCORES",
+          ]) as (ZSetMember | string)[]
+          const zsetElements: ZSetMember[] = []
+          if (rawElements.length > 0 && typeof rawElements[0] === "object" && rawElements[0] !== null && "key" in rawElements[0]) {
+            for (const item of rawElements as ZSetMember[]) {
+              zsetElements.push({ key: String(item.key), value: Number(item.value) })
+            }
+          } else {
+            for (let i = 0; i < rawElements.length; i += 2) {
+              zsetElements.push({
+                key: String(rawElements[i]),
+                value: Number(rawElements[i + 1]),
+              })
+            }
+          }
+          elements = zsetElements
+          nextOffset = offset + elements.length
+          hasMore = nextOffset < sizeResult
+        } else {
+          elements = []
+          nextOffset = offset
+          hasMore = false
+        }
+        break
+      }
+
+      default:
+        throw new Error(`Pagination not supported for key type: ${keyType}`)
+    }
+
+    ws.send(
+      JSON.stringify({
+        type: VALKEY.KEYS.getKeyElementsFulfilled,
+        payload: {
+          connectionId,
+          key,
+          keyType: normalizedType,
+          elements,
+          cursor: nextCursor,
+          offset: nextOffset,
+          hasMore,
+          collectionSize,
+        },
+      }),
+    )
+  } catch (err) {
+    console.error(`Error paginating key elements for ${key}:`, err)
+    ws.send(
+      JSON.stringify({
+        type: VALKEY.KEYS.getKeyElementsFailed,
+        payload: {
+          connectionId,
+          key,
+          error: err instanceof Error ? err.message : String(err),
+        },
+      }),
+    )
+  }
+}
+
 export async function deleteKey(
   client: GlideClient | GlideClusterClient,
   ws: WebSocket,
