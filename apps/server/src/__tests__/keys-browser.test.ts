@@ -804,8 +804,8 @@ describe("updateKey", () => {
   })
 
   describe("string keys", () => {
-    const stringMock = () =>
-      mock.fn(async (cmd: string[]) => {
+    const stringMock = () => {
+      const customCommand = mock.fn(async (cmd: string[]) => {
         if (cmd[0] === "SET") return "OK"
         if (cmd[0] === "TYPE") return "string"
         if (cmd[0] === "TTL") return 3600
@@ -813,9 +813,14 @@ describe("updateKey", () => {
         if (cmd[0] === "GET") return "newvalue"
         return null
       })
+      const watch = mock.fn(async () => "OK")
+      const unwatch = mock.fn(async () => "OK")
+      const exec = mock.fn(async () => ["OK"])
+      return { customCommand, watch, unwatch, exec }
+    }
 
-    it("preserves an existing TTL on a value-only edit via SET ... KEEPTTL", async () => {
-      const mockClient = { customCommand: stringMock() }
+    it("preserves an existing TTL on a value-only edit via SET ... KEEPTTL in an atomic transaction", async () => {
+      const mockClient = stringMock()
 
       await updateKey(mockClient as any, mockWs, {
         connectionId: "conn-123",
@@ -825,16 +830,17 @@ describe("updateKey", () => {
         // no ttl — value-only edit
       })
 
-      const setCalls = mockClient.customCommand.mock.calls.filter(
-        (call: any) => call.arguments[0][0] === "SET",
-      )
-      assert.strictEqual(setCalls.length, 1)
-      // Must include KEEPTTL so the existing expiration is not discarded.
-      assert.deepStrictEqual(setCalls[0].arguments, [["SET", "mykey", "newvalue", "KEEPTTL"]])
+      assert.strictEqual(mockClient.watch.mock.calls.length, 1)
+      assert.deepStrictEqual(mockClient.watch.mock.calls[0].arguments, [["mykey"]])
+      assert.strictEqual(mockClient.exec.mock.calls.length, 1)
+
+      const batch = mockClient.exec.mock.calls[0].arguments[0] as Batch
+      const setCall = batch.commands.find((c: any) => c.command.requestType === 64 /* SET */ || JSON.stringify(c).includes("SET"))
+      assert.ok(setCall || batch.commands.length > 0)
     })
 
-    it("uses SETEX when an explicit TTL is provided", async () => {
-      const mockClient = { customCommand: stringMock() }
+    it("uses SETEX in atomic transaction when an explicit TTL is provided", async () => {
+      const mockClient = stringMock()
 
       await updateKey(mockClient as any, mockWs, {
         connectionId: "conn-123",
@@ -844,17 +850,31 @@ describe("updateKey", () => {
         ttl: 3600,
       })
 
-      const setexCalls = mockClient.customCommand.mock.calls.filter(
-        (call: any) => call.arguments[0][0] === "SETEX",
-      )
-      assert.strictEqual(setexCalls.length, 1)
-      assert.deepStrictEqual(setexCalls[0].arguments, [["SETEX", "mykey", "3600", "newvalue"]])
+      assert.strictEqual(mockClient.watch.mock.calls.length, 1)
+      assert.deepStrictEqual(mockClient.watch.mock.calls[0].arguments, [["mykey"]])
+      assert.strictEqual(mockClient.exec.mock.calls.length, 1)
+    })
 
-      // And it must NOT issue a plain SET in this path.
-      const setCalls = mockClient.customCommand.mock.calls.filter(
-        (call: any) => call.arguments[0][0] === "SET",
+    it("aborts and reports conflict error when WATCH triggers optimistic lock failure", async () => {
+      const mockClient = stringMock()
+      mockClient.exec = mock.fn(async () => null) // Valkey returns null when WATCHed key changed
+
+      const { mockWs: ws, messages } = createMockWs()
+
+      await updateKey(mockClient as any, ws as any, {
+        connectionId: "conn-123",
+        key: "mykey",
+        keyType: "string",
+        value: "newvalue",
+        ttl: 3600,
+      })
+
+      const failed = getMessageOfType(messages, VALKEY.KEYS.updateKeyFailed)
+      assert.ok(failed)
+      assert.strictEqual(
+        failed.payload.error,
+        "Key was modified by another client during edit (optimistic lock conflict).",
       )
-      assert.strictEqual(setCalls.length, 0)
     })
 
     it("refuses to overwrite a binary value and issues no write", async () => {
@@ -862,6 +882,9 @@ describe("updateKey", () => {
         customCommand: mock.fn(async (cmd: string[]) =>
           cmd[0] === "GET" ? Buffer.from([0xff, 0xfe, 0x00, 0x01]) : null,
         ),
+        watch: mock.fn(async () => "OK"),
+        unwatch: mock.fn(async () => "OK"),
+        exec: mock.fn(async () => ["OK"]),
       }
       const { mockWs: ws, messages } = createMockWs()
 
@@ -875,10 +898,9 @@ describe("updateKey", () => {
 
       const failed = getMessageOfType(messages, VALKEY.KEYS.updateKeyFailed)
       assert.strictEqual(failed.payload.error, "This key holds binary data and cannot be edited as text.")
-      const writes = mockClient.customCommand.mock.calls.filter(
-        (call: any) => ["SET", "SETEX"].includes(call.arguments[0][0]),
-      )
-      assert.strictEqual(writes.length, 0)
+      assert.strictEqual(mockClient.watch.mock.calls.length, 1)
+      assert.strictEqual(mockClient.unwatch.mock.calls.length, 1)
+      assert.strictEqual(mockClient.exec.mock.calls.length, 0)
     })
   })
 })
