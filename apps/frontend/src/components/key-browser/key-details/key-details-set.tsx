@@ -235,10 +235,11 @@ export default function KeyDetailsSet(
           </div>
         )}
         {!isEditable &&
-          (selectedKeyInfo.hasMoreElements ||
-            (selectedKeyInfo.cursor && selectedKeyInfo.cursor !== "0") ||
-            (selectedKeyInfo.collectionSize !== undefined &&
-              selectedKeyInfo.elements.length < selectedKeyInfo.collectionSize)) && (
+          (selectedKeyInfo.hasMoreElements !== undefined
+            ? selectedKeyInfo.hasMoreElements
+            : (selectedKeyInfo.cursor && selectedKeyInfo.cursor !== "0") ||
+              (selectedKeyInfo.collectionSize !== undefined &&
+                selectedKeyInfo.elements.length < selectedKeyInfo.collectionSize)) && (
           <div className="flex flex-col items-center justify-center py-4 gap-2 border-t border-border">
             <Typography variant="bodySm">
               Showing {selectedKeyInfo.elements.length}

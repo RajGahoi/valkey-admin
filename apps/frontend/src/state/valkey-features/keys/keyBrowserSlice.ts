@@ -314,7 +314,7 @@ const keyBrowserSlice = createSlice({
         collectionSize?: number;
       }>,
     ) => {
-      const { connectionId, key, elements, cursor, hasMore, collectionSize } = action.payload
+      const { connectionId, key, keyType, elements, cursor, hasMore, collectionSize } = action.payload
       if (!state[connectionId]) {
         state[connectionId] = createConnectionState()
       }
@@ -322,7 +322,18 @@ const keyBrowserSlice = createSlice({
       const targetKey = state[connectionId].keys.find((k) => k.name === key)
       if (targetKey) {
         if (Array.isArray(targetKey.elements)) {
-          targetKey.elements = [...targetKey.elements, ...elements]
+          const normalizedType = (keyType || targetKey.type || "").toLowerCase()
+          if (normalizedType === "hash") {
+            const seenKeys = new Set(targetKey.elements.map((e: { key: string }) => e.key))
+            const uniqueNew = elements.filter((e: { key: string }) => !seenKeys.has(e.key))
+            targetKey.elements = [...targetKey.elements, ...uniqueNew]
+          } else if (normalizedType === "set") {
+            const seenMembers = new Set(targetKey.elements)
+            const uniqueNew = elements.filter((m: string) => !seenMembers.has(m))
+            targetKey.elements = [...targetKey.elements, ...uniqueNew]
+          } else {
+            targetKey.elements = [...targetKey.elements, ...elements]
+          }
         } else {
           targetKey.elements = elements
         }
