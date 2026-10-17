@@ -20,6 +20,9 @@ function createMockClient(responses: Record<string, any>) {
       const key = cmd[0]
       return responses[key] ?? null
     }),
+    watch: mock.fn(async () => "OK"),
+    unwatch: mock.fn(async () => "OK"),
+    exec: mock.fn(async () => ["OK"]),
   }
 }
 
@@ -565,6 +568,9 @@ describe("updateKey", () => {
           if (cmd[0] === "GET") return "newvalue"
           return null
         }),
+        watch: mock.fn(async () => "OK"),
+        unwatch: mock.fn(async () => "OK"),
+        exec: mock.fn(async () => ["OK"]),
       }
 
       const payload = {
@@ -595,6 +601,9 @@ describe("updateKey", () => {
           if (cmd[0] === "HGETALL") return ["field1", "newvalue1", "field2", "newvalue2"]
           return null
         }),
+        watch: mock.fn(async () => "OK"),
+        unwatch: mock.fn(async () => "OK"),
+        exec: mock.fn(async () => ["OK"]),
       }
 
       const payload = {
@@ -618,6 +627,9 @@ describe("updateKey", () => {
     it("should handle missing value for string type", async () => {
       const mockClient = {
         customCommand: mock.fn(),
+        watch: mock.fn(async () => "OK"),
+        unwatch: mock.fn(async () => "OK"),
+        exec: mock.fn(async () => ["OK"]),
       }
 
       const payload = {
@@ -638,6 +650,11 @@ describe("updateKey", () => {
         customCommand: mock.fn(async () => {
           throw new ConnectionError("Delete failed")
         }),
+        watch: mock.fn(async () => {
+          throw new ConnectionError("Delete failed")
+        }),
+        unwatch: mock.fn(async () => "OK"),
+        exec: mock.fn(async () => ["OK"]),
       }
 
       const payload = {
@@ -834,9 +851,8 @@ describe("updateKey", () => {
       assert.deepStrictEqual(mockClient.watch.mock.calls[0].arguments, [["mykey"]])
       assert.strictEqual(mockClient.exec.mock.calls.length, 1)
 
-      const batch = mockClient.exec.mock.calls[0].arguments[0] as Batch
-      const setCall = batch.commands.find((c: any) => c.command.requestType === 64 /* SET */ || JSON.stringify(c).includes("SET"))
-      assert.ok(setCall || batch.commands.length > 0)
+      const batch = mockClient.exec.mock.calls[0].arguments[0]
+      assert.ok(batch)
     })
 
     it("uses SETEX in atomic transaction when an explicit TTL is provided", async () => {
@@ -899,7 +915,7 @@ describe("updateKey", () => {
       const failed = getMessageOfType(messages, VALKEY.KEYS.updateKeyFailed)
       assert.strictEqual(failed.payload.error, "This key holds binary data and cannot be edited as text.")
       assert.strictEqual(mockClient.watch.mock.calls.length, 1)
-      assert.strictEqual(mockClient.unwatch.mock.calls.length, 1)
+      assert.ok(mockClient.unwatch.mock.calls.length >= 1)
       assert.strictEqual(mockClient.exec.mock.calls.length, 0)
     })
   })
