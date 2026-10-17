@@ -451,6 +451,9 @@ export async function getKeyInfo(
   }
 }
 
+/**
+ * Scans a standalone Valkey node up to the specified limit and reports whether additional keys exist.
+ */
 async function scanStandalone(
   client: GlideClient,
   payload: {
@@ -464,6 +467,7 @@ async function scanStandalone(
   const limit = payload.limit ?? 1000
     
   let cursor = "0"
+  let hasMore = false
   do {
     const scanResult = (await client.customCommand(
       buildScanCommandArgs({ cursor, pattern: payload.pattern, count: payload.count }),
@@ -472,10 +476,20 @@ async function scanStandalone(
     const [newCursor, keys] = scanResult
 
     cursor = newCursor
-    keys.forEach((key) => {allKeys.add(key)})
+    for (const key of keys) {
+      if (allKeys.size < limit) {
+        allKeys.add(key)
+      } else if (!allKeys.has(key)) {
+        hasMore = true
+      }
+    }
   } while (allKeys.size < limit && cursor !== "0")
 
-  return { keys: allKeys, hasMore: cursor !== "0" }
+  if (cursor !== "0") {
+    hasMore = true
+  }
+
+  return { keys: allKeys, hasMore }
 }
 
 type ClusterScanResult = {
@@ -483,6 +497,9 @@ type ClusterScanResult = {
   value:[string, string[]]
 }
 
+/**
+ * Scans all primary nodes in a Valkey cluster up to the specified limit and reports whether additional keys exist.
+ */
 async function scanCluster(
   client: GlideClusterClient,
   payload: {
@@ -497,6 +514,15 @@ async function scanCluster(
   const allKeys = new Set<string>()
   const limit = payload.limit ?? 1000
   let clusterHasMore = false
+
+  const addKey = (k: string) => {
+    if (allKeys.has(k)) return
+    if (allKeys.size < limit) {
+      allKeys.add(k)
+    } else {
+      clusterHasMore = true
+    }
+  }
 
   // Run initial SCAN 0 on all primaries
   const scanClusterResult = await client.customCommand(
@@ -513,9 +539,7 @@ async function scanCluster(
       let cursor = value[0]
       const keys = value[1]
 
-      keys.forEach((k) => {
-        if (allKeys.size < limit) allKeys.add(k)
-      })
+      keys.forEach(addKey)
 
       const [host, portStr] = nodeAddress.split(/:(?=[^:]+$)/) // split on last ":"
       const nodeRouteOption: RouteOption = {
@@ -536,7 +560,7 @@ async function scanCluster(
         ) as [string, string[]]
 
         cursor = nextCursor
-        newKeys.forEach((k) => { if (allKeys.size < limit) allKeys.add(k) })
+        newKeys.forEach(addKey)
       }
       if (cursor !== "0") {
         clusterHasMore = true
@@ -548,6 +572,10 @@ async function scanCluster(
 }
 
 const limit = pLimit(10) 
+
+/**
+ * Fetches and enriches keys matching an optional pattern, determining whether the returned set is capped.
+ */
 export async function getKeys(
   client: GlideClient | GlideClusterClient,
   ws: WebSocket,
@@ -576,7 +604,8 @@ export async function getKeys(
       ),
     )
 
-    const isCapped = scanResult.hasMore || (typeof totalKeys === "number" && totalKeys > keyList.length)
+    const isFiltered = Boolean(payload.pattern && payload.pattern !== "*")
+    const isCapped = scanResult.hasMore || (!isFiltered && typeof totalKeys === "number" && totalKeys > keyList.length)
 
     ws.send(
       JSON.stringify({
