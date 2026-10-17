@@ -53,8 +53,10 @@ export default function KeyDetailsZSet(
       .map((newScore, index) => ({
         member: selectedKeyInfo.elements[index].key,
         score: newScore,
+        isMemberBinary: /\\x[0-9a-fA-F]{2}/.test(selectedKeyInfo.elements[index].key),
       }))
-      .filter((update, index) => update.score !== selectedKeyInfo.elements[index].value)
+      .filter((update, index) => !update.isMemberBinary && update.score !== selectedKeyInfo.elements[index].value)
+      .map(({ member, score }) => ({ member, score }))
 
     dispatch(updateKeyRequested({
       connectionId: connectionId,
@@ -103,6 +105,8 @@ export default function KeyDetailsZSet(
                 {isEditable ? (
                   <Input
                     aria-label="Edit zset value"
+                    className={cn(isMemberBinary && "opacity-70 cursor-not-allowed bg-muted/40")}
+                    disabled={isMemberBinary}
                     onChange={(e) => handleValueChange(index, e.target.value)}
                     step="any"
                     type="number"

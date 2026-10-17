@@ -176,6 +176,7 @@ export default function KeyDetailsSet(
                       <CustomTooltip content="Delete element">
                         <Button
                           aria-label="Delete set element"
+                          disabled={isItemBinary}
                           onClick={() => handleDeleteElement(element)}
                           variant={"destructiveGhost"}
                         >

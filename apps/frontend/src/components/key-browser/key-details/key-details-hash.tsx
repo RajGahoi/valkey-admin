@@ -70,8 +70,13 @@ export default function KeyDetailsHash(
 
   const handleSave = () => {
     // combine existing edited fields and new fields
+    const binaryKeys = new Set(
+      selectedKeyInfo.elements
+        .filter((e) => e.isKeyBinary || e.isValueBinary)
+        .map((e) => e.key),
+    )
     const existingFields = Object.entries(editedHashValue)
-      .filter(([field]) => !deletedHashFields.has(field))
+      .filter(([field]) => !deletedHashFields.has(field) && !binaryKeys.has(field))
       .map(([field, value]) => ({
         field,
         value,
@@ -199,6 +204,7 @@ export default function KeyDetailsHash(
                       <CustomTooltip content="Delete field">
                         <Button
                           aria-label="Delete field"
+                          disabled={element.isKeyBinary}
                           onClick={() => handleDeleteHashField(element.key)}
                           variant={"destructiveGhost"}
                         >
