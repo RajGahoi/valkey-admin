@@ -109,6 +109,7 @@ describe("command restrictions", () => {
       ]
       for (const cmd of writes) {
         const args = parseCommandArgs(cmd)
+        assert.strictEqual(isWriteCommand(args), true)
         const blocked = findReadOnlyBlockedCommand(args)
         assert.ok(blocked, `Expected ${cmd} to be blocked in read-only mode`)
         assert.match(blocked!.reason, /cannot be executed while Read-Only mode is enabled/)
@@ -137,6 +138,7 @@ describe("command restrictions", () => {
       ]
       for (const cmd of reads) {
         const args = parseCommandArgs(cmd)
+        assert.strictEqual(isWriteCommand(args), false)
         const blocked = findReadOnlyBlockedCommand(args)
         assert.strictEqual(blocked, undefined, `Expected ${cmd} to be allowed in read-only mode`)
       }
