@@ -31,12 +31,20 @@ interface BaseKeyInfo {
 interface ElementInfo {
   key: string;
   value: string;
+  isKeyBinary?: boolean;
+  isValueBinary?: boolean;
+  isBinary?: boolean;
 }
 
 interface ZSetElement {
   key: string;
   value: number;
+  isKeyBinary?: boolean;
+  isBinary?: boolean;
 }
+
+type SetElement = string | { value: string; isBinary?: boolean }
+type ListElement = string | { value: string; isBinary?: boolean }
 
 type KeyInfo =
   | (BaseKeyInfo & {
@@ -49,11 +57,11 @@ type KeyInfo =
   })
   | (BaseKeyInfo & {
     type: "list";
-    elements: string[];
+    elements: ListElement[];
   })
   | (BaseKeyInfo & {
     type: "set";
-    elements: string[];
+    elements: SetElement[];
   })
   | (BaseKeyInfo & {
     type: "zset";

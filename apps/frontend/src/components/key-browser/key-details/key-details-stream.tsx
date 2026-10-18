@@ -21,9 +21,30 @@ interface KeyDetailsStreamProps {
 export default function KeyDetailsStream(
   { selectedKeyInfo }: KeyDetailsStreamProps,
 ) {
+  const entries: Array<{ key: string; value: [string, string][] }> = (selectedKeyInfo?.elements || []).map((entry: unknown) => {
+    if (Array.isArray(entry)) {
+      const key = String(entry[0])
+      const rawFields = entry[1]
+      const value: [string, string][] = []
+      if (Array.isArray(rawFields)) {
+        if (rawFields.length > 0 && Array.isArray(rawFields[0])) {
+          for (const pair of rawFields as unknown[][]) {
+            value.push([String(pair[0]), String(pair[1])])
+          }
+        } else {
+          for (let i = 0; i < rawFields.length; i += 2) {
+            value.push([String(rawFields[i]), String(rawFields[i + 1])])
+          }
+        }
+      }
+      return { key, value }
+    }
+    return entry as { key: string; value: [string, string][] }
+  })
+
   return (
     <div className="flex flex-col w-full p-4 space-y-4">
-      {selectedKeyInfo?.elements.map((entry, index: number) => (
+      {entries.map((entry, index: number) => (
         <div className="overflow-hidden" key={index}>
           <div className={cn("bg-muted/60 text-foreground py-2 px-4")}>
             <Typography variant="label">Entry ID: {entry.key}</Typography> 
@@ -55,7 +76,7 @@ export default function KeyDetailsStream(
           </table>
         </div>
       ))}
-      {selectedKeyInfo.elements.length === 0 && (
+      {entries.length === 0 && (
         <div className="text-center text-gray-500 py-8">
           No entries in this stream
         </div>
