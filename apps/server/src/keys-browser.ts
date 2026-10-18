@@ -274,14 +274,11 @@ async function getPaginatedZSetInfo(
     }
 
     const decodeScore = (val: unknown): string | number => {
-      if (typeof val === "number") return val
+      if (typeof val === "number" || typeof val === "string") return val
       if (Buffer.isBuffer(val)) {
-        const decoded = decodeToStringValue(val)
-        const num = Number(decoded.value)
-        return isNaN(num) ? decoded.value : num
+        return decodeToStringValue(val).value
       }
-      const num = Number(val)
-      return isNaN(num) ? String(val) : num
+      return String(val)
     }
 
     // Adds only members we haven't seen yet; returns how many were new.

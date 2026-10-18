@@ -242,7 +242,7 @@ describe("getKeyInfo", () => {
 
       assert.strictEqual(result.name, "myzset")
       assert.deepStrictEqual(result.elements, [
-        { key: "member1", value: 10.5 },
+        { key: "member1", value: "10.5" },
       ])
       assert.strictEqual(result.elementsWarning, undefined)
     })
