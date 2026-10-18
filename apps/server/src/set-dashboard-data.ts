@@ -153,7 +153,7 @@ export async function setClusterDashboardData(
 ) {
   try {
     const [rawInfo, { clusterNodes, topologyError }] = await Promise.all([
-      client.info(),
+      client.info({ route: "allNodes" }),
       refreshClusterNodes(clusterId, client, clusterNodesRegistry),
     ])
     const clusterInfo = parseClusterInfo(rawInfo)
