@@ -483,10 +483,24 @@ async function scanStandalone(
         hasMore = true
       }
     }
+    if (hasMore) break
   } while (allKeys.size < limit && cursor !== "0")
 
-  if (cursor !== "0") {
-    hasMore = true
+  // If we reached the limit and still have a nonzero cursor, perform single-batch checks to confirm
+  // whether at least one additional distinct matching key actually exists before marking as capped.
+  while (!hasMore && cursor !== "0") {
+    const scanResult = (await client.customCommand(
+      buildScanCommandArgs({ cursor, pattern: payload.pattern, count: payload.count }),
+    )) as [string, string[]]
+
+    const [newCursor, keys] = scanResult
+    cursor = newCursor
+    for (const key of keys) {
+      if (!allKeys.has(key)) {
+        hasMore = true
+        break
+      }
+    }
   }
 
   return { keys: allKeys, hasMore }
@@ -562,8 +576,25 @@ async function scanCluster(
         cursor = nextCursor
         newKeys.forEach(addKey)
       }
-      if (cursor !== "0") {
-        clusterHasMore = true
+
+      // If we reached the limit and still have a nonzero cursor on this node, check if an additional matching key exists
+      while (!clusterHasMore && cursor !== "0") {
+        const [nextCursor, newKeys] = await client.customCommand(
+          buildScanCommandArgs({
+            cursor,
+            pattern: payload.pattern,
+            count: payload.count,
+          }),
+          nodeRouteOption,
+        ) as [string, string[]]
+
+        cursor = nextCursor
+        for (const k of newKeys) {
+          if (!allKeys.has(k)) {
+            clusterHasMore = true
+            break
+          }
+        }
       }
     }),
   )
