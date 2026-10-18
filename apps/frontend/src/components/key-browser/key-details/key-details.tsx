@@ -46,6 +46,14 @@ interface ZSetElement {
 type SetElement = string | { value: string; isBinary?: boolean }
 type ListElement = string | { value: string; isBinary?: boolean }
 
+interface StreamFieldElement {
+  field: string;
+  value: string;
+  isFieldBinary?: boolean;
+  isValueBinary?: boolean;
+  isBinary?: boolean;
+}
+
 type KeyInfo =
   | (BaseKeyInfo & {
     type: "string";
@@ -69,10 +77,13 @@ type KeyInfo =
   })
   | (BaseKeyInfo & {
     type: "stream";
-    elements: Array<{
-      key: string;
-      value: [string, string][];
-    }>;
+    elements: Array<
+      | [string, Array<[string, string] | StreamFieldElement>]
+      | {
+        key: string;
+        value: Array<[string, string] | StreamFieldElement>;
+      }
+    >;
   })
   | (BaseKeyInfo & {
     type: "ReJSON-RL";

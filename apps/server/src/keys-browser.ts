@@ -201,16 +201,35 @@ async function getPaginatedStreamInfo(
         const rawFields = entry[1]
         if (Array.isArray(rawFields)) {
           if (rawFields.length > 0 && Array.isArray(rawFields[0])) {
-            const decodedPairs = (rawFields as unknown[][]).map(([f, v]) => [
-              typeof f === "string" ? f : decodeToStringValue(f as GlideReturnType).value,
-              typeof v === "string" ? v : decodeToStringValue(v as GlideReturnType).value,
-            ])
+            const decodedPairs = (rawFields as unknown[][]).map(([f, v]) => {
+              const decodedF = typeof f === "string" ? { value: f, isBinary: false } : decodeToStringValue(f as GlideReturnType)
+              const decodedV = typeof v === "string" ? { value: v, isBinary: false } : decodeToStringValue(v as GlideReturnType)
+              return {
+                field: decodedF.value,
+                value: decodedV.value,
+                ...(decodedF.isBinary ? { isFieldBinary: true } : {}),
+                ...(decodedV.isBinary ? { isValueBinary: true } : {}),
+                ...(decodedF.isBinary || decodedV.isBinary ? { isBinary: true } : {}),
+              }
+            })
             return [id, decodedPairs]
           } else {
-            const decodedFields = (rawFields as GlideReturnType[]).map((f) =>
-              typeof f === "string" ? f : decodeToStringValue(f).value,
-            )
-            return [id, decodedFields]
+            type StreamFieldPair = { field: string; value: string; isFieldBinary?: boolean; isValueBinary?: boolean; isBinary?: boolean }
+            const decodedPairs: StreamFieldPair[] = []
+            for (let i = 0; i < rawFields.length; i += 2) {
+              const f = rawFields[i]
+              const v = rawFields[i + 1]
+              const decodedF = typeof f === "string" ? { value: f, isBinary: false } : decodeToStringValue(f)
+              const decodedV = typeof v === "string" ? { value: v, isBinary: false } : decodeToStringValue(v)
+              decodedPairs.push({
+                field: decodedF.value,
+                value: decodedV.value,
+                ...(decodedF.isBinary ? { isFieldBinary: true } : {}),
+                ...(decodedV.isBinary ? { isValueBinary: true } : {}),
+                ...(decodedF.isBinary || decodedV.isBinary ? { isBinary: true } : {}),
+              })
+            }
+            return [id, decodedPairs]
           }
         }
         return [id, rawFields]
@@ -244,18 +263,38 @@ async function getPaginatedZSetInfo(
       client.customCommand([commands.sizeCmd, keyInfo.name]),
     ]) as [ZSetMember[], number]
 
-    const seen = new Set<string>() // member names we've already kept
+    const seen = new Set<string>() // member binary identities we've already kept
     const results: ZSetMember[] = []
+
+    const getMemberIdentity = (rawKey: unknown): string => {
+      if (Buffer.isBuffer(rawKey)) {
+        return "b:" + rawKey.toString("hex")
+      }
+      return "s:" + String(rawKey)
+    }
+
+    const decodeScore = (val: unknown): string | number => {
+      if (typeof val === "number") return val
+      if (Buffer.isBuffer(val)) {
+        const decoded = decodeToStringValue(val)
+        const num = Number(decoded.value)
+        return isNaN(num) ? decoded.value : num
+      }
+      const num = Number(val)
+      return isNaN(num) ? String(val) : num
+    }
+
     // Adds only members we haven't seen yet; returns how many were new.
     const addMembers = (page: ZSetMember[]): number => {
       let added = 0
       for (const member of page) {
-        const decoded = decodeToStringValue(member.key as unknown as GlideReturnType)
-        if (!seen.has(decoded.value)) {
-          seen.add(decoded.value)
+        const identity = getMemberIdentity(member.key)
+        if (!seen.has(identity)) {
+          seen.add(identity)
+          const decoded = decodeToStringValue(member.key as unknown as GlideReturnType)
           results.push({
             key: decoded.value,
-            value: member.value,
+            value: decodeScore(member.value),
             ...(decoded.isBinary ? { isKeyBinary: true, isBinary: true } : {}),
           })
           added++
@@ -269,28 +308,36 @@ async function getPaginatedZSetInfo(
     // members lexicographically with BYLEX, resuming just past the last one we kept.
     // BYLEX can't return scores (WITHSCORES is rejected), but every member in this
     // range shares `score`, so we re-attach it ourselves.
-    const drainTiedScore = async (score: string, lastScannedAtScoreKey: string, keptAtScore: number): Promise<void> => {
+    const drainTiedScore = async (score: string, lastScannedRawKey: unknown, keptAtScore: number): Promise<void> => {
       const tiedCount = await client.customCommand(["ZCOUNT", keyInfo.name, score, score]) as number
       let remaining = tiedCount - keptAtScore
-      let lexCursor = `(${lastScannedAtScoreKey}` // exclusive, so we don't re-read the last kept member
+      let rawLexCursor: GlideReturnType = Buffer.isBuffer(lastScannedRawKey)
+        ? Buffer.concat([Buffer.from("("), lastScannedRawKey])
+        : `(${String(lastScannedRawKey)}`
+
       while (remaining > 0) {
         const members = await client.customCommand([
-          ...commands.elementsCmd, lexCursor, "+", "BYLEX", "LIMIT", "0", VALKEY_CLIENT.ELEMENT_PAGE_SIZE.toString(),
+          ...commands.elementsCmd, rawLexCursor, "+", "BYLEX", "LIMIT", "0", VALKEY_CLIENT.ELEMENT_PAGE_SIZE.toString(),
         ], { decoder: Decoder.Bytes }) as GlideReturnType[]
         if (!members || members.length === 0) break
         for (const rawMember of members) {
           if (remaining === 0) break // the page crossed into a higher score; stop before it
-          const decoded = decodeToStringValue(rawMember)
-          seen.add(decoded.value)
-          results.push({
-            key: decoded.value,
-            value: score,
-            ...(decoded.isBinary ? { isKeyBinary: true, isBinary: true } : {}),
-          })
-          remaining--
+          const identity = getMemberIdentity(rawMember)
+          if (!seen.has(identity)) {
+            seen.add(identity)
+            const decoded = decodeToStringValue(rawMember)
+            results.push({
+              key: decoded.value,
+              value: decodeScore(score),
+              ...(decoded.isBinary ? { isKeyBinary: true, isBinary: true } : {}),
+            })
+            remaining--
+          }
         }
         const lastRaw = members[members.length - 1]
-        lexCursor = `(${decodeToStringValue(lastRaw).value}`
+        rawLexCursor = Buffer.isBuffer(lastRaw)
+          ? Buffer.concat([Buffer.from("("), lastRaw])
+          : `(${String(lastRaw)}`
       }
     }
 
@@ -301,7 +348,7 @@ async function getPaginatedZSetInfo(
     while (results.length < collectionSize && lastPage.length === VALKEY_CLIENT.ELEMENT_PAGE_SIZE) {
       // Next page starts at the last score we saw. Including that score (not skipping it)
       // means members tied on that score aren't lost — `seen` removes the repeats
-      const lastScore = String(lastPage[lastPage.length - 1].value)
+      const lastScore = String(decodeScore(lastPage[lastPage.length - 1].value))
       const page = await client.customCommand(buildZRangeByScoreArgs(lastScore), { decoder: Decoder.Bytes }) as ZSetMember[]
       if (!page || page.length === 0) break
 
@@ -310,8 +357,7 @@ async function getPaginatedZSetInfo(
         // Drain the rest of it lexicographically with BYLEX, then resume past the score.
         const scannedAtScoreCount = results.reduce((n, m) => (String(m.value) === lastScore ? n + 1 : n), 0)
         const lastKeyRaw = page[page.length - 1].key
-        const lastKeyDecoded = typeof lastKeyRaw === "string" ? lastKeyRaw : decodeToStringValue(lastKeyRaw as unknown as GlideReturnType).value
-        await drainTiedScore(lastScore, lastKeyDecoded, scannedAtScoreCount)
+        await drainTiedScore(lastScore, lastKeyRaw, scannedAtScoreCount)
         const matchingLastScoreCount = await client.customCommand(buildZRangeByScoreArgs(`(${lastScore}`), { decoder: Decoder.Bytes }) as ZSetMember[]
         if (!matchingLastScoreCount || matchingLastScoreCount.length === 0) break
         addMembers(matchingLastScoreCount)
