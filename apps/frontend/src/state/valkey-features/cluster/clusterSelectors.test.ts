@@ -5,10 +5,10 @@ import type { PrimaryNode, NodeUtilization } from "./clusterSlice"
 describe("clusterSelectors", () => {
   const mockClusterNodes: Record<string, PrimaryNode> = {
     "node-primary-1": {
-      id: "node-primary-1",
       host: "127.0.0.1",
       port: 7000,
-      slots: "0-5000",
+      tls: false,
+      verifyTlsCertificate: false,
       replicas: [
         {
           id: "node-replica-1",
@@ -55,18 +55,24 @@ describe("clusterSelectors", () => {
       }
       const mockUtilization: Record<string, NodeUtilization> = {
         "node-primary-1": {
+          nodeId: "node-primary-1",
           used_memory: 1000,
           memory_limit_bytes: 2000,
           memory_basis: "maxmemory",
           memory_utilization_percent: 50,
           cpu_utilization_percent: 85, // high CPU
+          cpu_sample_interval_seconds: null,
+          warnings: [],
         },
         "127-0-0-1-7001": {
+          nodeId: "127-0-0-1-7001",
           used_memory: 500,
           memory_limit_bytes: 2000,
           memory_basis: "maxmemory",
           memory_utilization_percent: 25,
           cpu_utilization_percent: 90, // high CPU on replica
+          cpu_sample_interval_seconds: null,
+          warnings: [],
         },
       }
 

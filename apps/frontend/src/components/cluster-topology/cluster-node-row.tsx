@@ -157,7 +157,7 @@ export function ClusterNodeRow({
     : "—"
   const isHostMemoryBasis = utilization?.memory_basis === "total_system_memory"
   const utilizationLevel = getNodeUtilizationLevel(utilization)
-  const isFlagged = role === "primary" && utilizationLevel === "high"
+  const isFlagged = utilizationLevel === "high"
 
   const memoryTooltip = hasLimit
     ? `${formatPercent(utilization?.memory_utilization_percent)} of configured maxmemory`
