@@ -59,6 +59,15 @@ describe("ConnectionForm", () => {
 
     fireEvent.change(screen.getByLabelText("Host"), { target: { value: "clustercfg.example.com" } })
     fireEvent.change(screen.getByLabelText("Database"), { target: { value: "7" } })
+    expect(screen.getByText("Hint: If this is a cluster configuration endpoint, switch Endpoint Type to Discovery.")).toBeInTheDocument()
+    expect(screen.getByLabelText("Node")).toBeChecked()
+
+    fireEvent.change(screen.getByLabelText("Host"), { target: { value: "cluster.example.com" } })
+    expect(screen.queryByText("Hint: If this is a cluster configuration endpoint, switch Endpoint Type to Discovery.")).not.toBeInTheDocument()
+    expect(screen.getByLabelText("Node")).toBeChecked()
+    expect(screen.getByLabelText("Database")).toHaveValue(7)
+
+    fireEvent.change(screen.getByLabelText("Host"), { target: { value: "clustercfg.example.com" } })
     fireEvent.click(screen.getByRole("button", { name: "Connect" }))
 
     await screen.findByRole("button", { name: /Connect/ })
